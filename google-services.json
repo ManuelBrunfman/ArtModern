@@ -1,0 +1,43 @@
+{
+  "project_info": {
+    "project_number": "453239832523",
+    "project_id": "artmodern-ab60f",
+    "storage_bucket": "artmodern-ab60f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:453239832523:android:e3057938083f3d93d5c04e",
+        "android_client_info": {
+          "package_name": "com.miapp.artemoderno"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "453239832523-7gbtmut42llqelu72gcpasehtn3semsa.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.miapp.artemoderno",
+            "certificate_hash": "f45d399351bde6c93ba0bfbd27dbf08f87464e8b"
+          }
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDjD3wywNxvqqGcmioz3e6Pk0LddK1gkZc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "453239832523-lb2q434vg4e3ur1a99b4lbj1qihct290.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
