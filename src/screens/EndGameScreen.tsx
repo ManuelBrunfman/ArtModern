@@ -1,23 +1,18 @@
-// src/screens/EndGameScreen.tsx
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, Button, Alert } from 'react-native';
 import firestore from '@react-native-firebase/firestore';
-import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
+import { useRoute, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RouteProp } from '@react-navigation/native';
+import { RootStackParamList } from '../navigation/types';
 import { dealInitialHands } from '../utils/gameSetup';
 
-type RootStackParamList = {
-  EndGame: { gameId: string };
-  Lobby: undefined;
-  Game: { gameId: string };
-};
-
+type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'EndGame'>;
 type EndGameRouteProp = RouteProp<RootStackParamList, 'EndGame'>;
-type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export default function EndGameScreen() {
-  const route = useRoute<EndGameRouteProp>();
   const navigation = useNavigation<NavigationProp>();
+  const route = useRoute<EndGameRouteProp>();
   const { gameId } = route.params;
 
   const [players, setPlayers] = useState<any[]>([]);
@@ -72,7 +67,6 @@ export default function EndGameScreen() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>🎉 Fin del Juego 🎉</Text>
-
       <Text style={styles.winner}>🏆 Ganador: {winner?.name} con ${winner?.money}</Text>
 
       <Text style={styles.subtitle}>Ranking de jugadores:</Text>
@@ -87,15 +81,15 @@ export default function EndGameScreen() {
 
       <Text style={styles.subtitle}>Valor acumulado de artistas:</Text>
       {Object.entries(artistValues).map(([artist, value]) => (
-        <Text key={artist} style={styles.artist}>
-          🎨 {artist}: ${value}
-        </Text>
+        <Text key={artist} style={styles.artist}>🎨 {artist}: ${value}</Text>
       ))}
 
       <View style={{ marginTop: 30 }}>
         <Button title="Volver al Lobby" onPress={() => navigation.navigate('Lobby')} />
         <View style={{ height: 12 }} />
         <Button title="Reiniciar partida" onPress={handleRestartGame} />
+        <View style={{ height: 12 }} />
+        <Button title="Ver colecciones de los jugadores" onPress={() => navigation.navigate('Collection', { gameId })} />
       </View>
     </View>
   );

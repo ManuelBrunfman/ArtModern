@@ -1,80 +1,139 @@
-import React, { useState } from 'react';
-import { View, Text, TextInput, Button, Alert } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, TextInput, Button, Alert, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import firestore from '@react-native-firebase/firestore';
 import { useAuth } from '../context/AuthContext';
+import firestore from '@react-native-firebase/firestore';
+import { joinRoom } from '../services/roomService';
+import { sanitizeNullableString } from '../utils/sanitize';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../navigation/types';
 
-type RootStackParamList = {
-  Game: { gameId: string };
-  Lobby: undefined;
-  JoinRoom: undefined;
+type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'JoinRoom'>;
+
+type GameRoom = {
+  id: string;
+  roomCode: string;
+  players: any[];
 };
 
 const JoinRoomScreen = () => {
-  const [code, setCode] = useState('');
+  const navigation = useNavigation<NavigationProp>();
   const { user } = useAuth();
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const [code, setCode] = useState('');
+  const [rooms, setRooms] = useState<GameRoom[]>([]);
 
-  const handleJoinRoom = async () => {
-    if (!code) return;
-    if (!user) {
-      Alert.alert('No hay usuario autenticado');
-      return;
-    }
+  useEffect(() => {
+    const unsubscribe = firestore()
+      .collection('games')
+      .where('status', '==', 'waiting')
+      .onSnapshot((querySnapshot) => {
+        const availableRooms = querySnapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        })) as GameRoom[];
+        setRooms(availableRooms);
+      });
 
+    return () => unsubscribe();
+  }, []);
+
+  const handleJoin = async (roomCode: string) => {
+    if (!user) return;
     try {
-      const query = await firestore()
-        .collection('games')
-        .where('roomCode', '==', code)
-        .limit(1)
-        .get();
-
-      if (query.empty) {
-        Alert.alert('Sala no encontrada');
-        return;
-      }
-
-      const gameDoc = query.docs[0];
-      await firestore()
-        .collection('games')
-        .doc(gameDoc.id)
-        .update({
-          players: firestore.FieldValue.arrayUnion({
-            uid: user.uid,
-            name: user.displayName,
-            photoURL: user.photoURL,
-            money: 0,
-            isHost: false,
-          }),
-        });
-
-      navigation.navigate('Game', { gameId: gameDoc.id });
-
+      const gameId = await joinRoom(
+        roomCode,
+        user.uid,
+        sanitizeNullableString(user.displayName),
+        sanitizeNullableString(user.photoURL)
+      );
+      navigation.navigate('WaitingRoom', { gameId });
     } catch (err) {
-      console.error(err);
-      Alert.alert('Error al unirse a la sala');
+      const message = err instanceof Error ? err.message : 'Error al unirse a la sala';
+      Alert.alert('Error', message);
     }
   };
 
+  const handleJoinByCode = () => {
+    if (!code.trim()) return;
+    handleJoin(code.trim().toUpperCase());
+  };
+
+  const renderRoom = ({ item }: { item: GameRoom }) => {
+    const alreadyJoined = item.players.some((p) => p.uid === user?.uid);
+
+    return (
+      <TouchableOpacity
+        onPress={() => !alreadyJoined && handleJoin(item.roomCode)}
+        style={[styles.roomItem, alreadyJoined && styles.disabledRoom]}
+        disabled={alreadyJoined}
+      >
+        <Text style={styles.roomText}>🎨 Sala {item.roomCode}</Text>
+        <Text style={styles.players}>👥 {item.players.length} jugadores</Text>
+        {alreadyJoined && <Text style={styles.note}>Ya estás en esta sala</Text>}
+      </TouchableOpacity>
+    );
+  };
+
   return (
-    <View style={{ padding: 20, flex: 1, justifyContent: 'center' }}>
-      <Text style={{ fontSize: 20, marginBottom: 20 }}>Unirse a una sala</Text>
+    <View style={styles.container}>
+      <Text style={styles.title}>Unirse a una sala</Text>
+
       <TextInput
-        placeholder="Código de sala"
+        placeholder="Ingresar código de sala"
         value={code}
         onChangeText={setCode}
-        style={{
-          borderWidth: 1,
-          borderColor: '#ccc',
-          padding: 10,
-          marginBottom: 20,
-          borderRadius: 6,
-        }}
+        style={styles.input}
+        autoCapitalize="characters"
       />
-      <Button title="Unirse" onPress={handleJoinRoom} />
+      <Button title="Unirse con código" onPress={handleJoinByCode} />
+
+      <Text style={styles.subtitle}>O elegir una sala activa:</Text>
+      <FlatList
+        data={rooms}
+        keyExtractor={(item) => item.id}
+        renderItem={renderRoom}
+        ListEmptyComponent={<Text>No hay salas disponibles por ahora.</Text>}
+      />
     </View>
   );
 };
 
 export default JoinRoomScreen;
+
+const styles = StyleSheet.create({
+  container: { flex: 1, padding: 20 },
+  title: { fontSize: 20, fontWeight: 'bold', marginBottom: 10 },
+  subtitle: { fontSize: 16, fontWeight: '600', marginTop: 20, marginBottom: 10 },
+  input: {
+    borderWidth: 1,
+    borderColor: '#ccc',
+    padding: 10,
+    marginBottom: 10,
+    borderRadius: 6,
+  },
+  roomItem: {
+    padding: 14,
+    marginBottom: 10,
+    backgroundColor: '#f4f4f4',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  disabledRoom: {
+    backgroundColor: '#e0e0e0',
+    opacity: 0.6,
+  },
+  roomText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  players: {
+    fontSize: 14,
+    marginTop: 4,
+  },
+  note: {
+    fontSize: 12,
+    color: '#555',
+    marginTop: 4,
+  },
+});

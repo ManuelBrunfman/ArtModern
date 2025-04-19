@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------------
-// src/screens/RoomLobbyScreen.tsx — reparte primero, luego cambia a in_progress
+// src/screens/WaitingRoomScreen.tsx — reparte primero las manos, luego arranca
 // -----------------------------------------------------------------------------
 import React, { useEffect, useState } from 'react';
 import { View, Text, Button, StyleSheet, Alert, FlatList } from 'react-native';
@@ -11,15 +11,21 @@ import type { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../navigation/types';
 import { dealInitialHands } from '../utils/gameSetup';
 
-type NavigationProp   = NativeStackNavigationProp<RootStackParamList, 'RoomLobby'>;
-type RoomLobbyRoute   = RouteProp<RootStackParamList, 'RoomLobby'>;
+/* ------------------------------------------------------------
+ * TIPOS DE ENRUTADO
+ * ---------------------------------------------------------- */
 
-export default function RoomLobbyScreen() {
+type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'WaitingRoom'>;
+type WaitingRoomRoute = RouteProp<RootStackParamList, 'WaitingRoom'>;
+
+export default function WaitingRoomScreen() {
+  /* contexto & navegación */
   const { user }       = useAuth();
   const navigation     = useNavigation<NavigationProp>();
-  const { params }     = useRoute<RoomLobbyRoute>();
+  const { params }     = useRoute<WaitingRoomRoute>();
   const { gameId }     = params;
 
+  /* estado local con la partida */
   const [game, setGame] = useState<any>(null);
 
   /* Suscripción en tiempo real */
@@ -33,6 +39,7 @@ export default function RoomLobbyScreen() {
 
         setGame(data);
 
+        // Cuando el host cambie a "in_progress", nos vamos a la pantalla de juego
         if (data.status === 'in_progress') {
           navigation.navigate('Game', { gameId });
         }
@@ -41,20 +48,22 @@ export default function RoomLobbyScreen() {
     return () => unsub();
   }, [gameId, navigation]);
 
-  /* El host reparte y luego cambia el estado */
+  /* --------------------------------------------------------
+   * El HOST reparte las cartas y después cambia a in_progress
+   * ------------------------------------------------------ */
   const handleStartGame = async () => {
     try {
-      Alert.alert('Repartiendo cartas…');
-      await dealInitialHands(gameId);
+      Alert.alert('🃏 Repartiendo cartas…');
+      await dealInitialHands(gameId); // 👈 llena el array "hand" de cada jugador
 
-      Alert.alert('¡Comienza la partida!');
+      Alert.alert('🚦 ¡Comienza la partida!');
       await firestore().collection('games').doc(gameId).update({
         status: 'in_progress',
         currentTurn: game?.players?.[0]?.uid ?? null,
         round: 1,
       });
     } catch (err) {
-      console.error(err);
+      console.error('❌ Error al iniciar el juego', err);
       Alert.alert('Error al iniciar el juego');
     }
   };
@@ -63,6 +72,9 @@ export default function RoomLobbyScreen() {
 
   const isHost = game.hostId === user?.uid;
 
+  /* --------------------------------------------------------
+   * UI
+   * ------------------------------------------------------ */
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Sala de Espera 🎉</Text>
@@ -84,6 +96,9 @@ export default function RoomLobbyScreen() {
   );
 }
 
+/* ----------------------------------------------------------
+ * ESTILOS
+ * -------------------------------------------------------- */
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 20, justifyContent: 'center' },
   title:     { fontSize: 24, fontWeight: 'bold', marginBottom: 10, textAlign: 'center' },

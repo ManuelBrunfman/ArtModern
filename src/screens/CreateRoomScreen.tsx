@@ -3,26 +3,26 @@ import { View, Text, Button, StyleSheet, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import { createRoom } from '../services/roomService';
+import { sanitizeNullableString } from '../utils/sanitize';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-
-type RootStackParamList = {
-  Game: { gameId: string };
-  JoinRoom: undefined;
-  CreateRoom: undefined;
-  Lobby: undefined;
-};
+import { RootStackParamList } from '../navigation/types';
 
 export default function CreateRoomScreen() {
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'CreateRoom'>>();
   const { user } = useAuth();
 
   const handleCreateRoom = async () => {
     if (!user) return;
 
     try {
-      const roomId = await createRoom(user.uid);
-      Alert.alert('Sala creada', `ID de sala: ${roomId}`);
-      navigation.navigate('Game', { gameId: roomId });
+      const { gameId, roomCode } = await createRoom(
+        user.uid,
+        sanitizeNullableString(user.displayName),
+        sanitizeNullableString(user.photoURL)
+      );
+
+      Alert.alert('Sala creada', `Código de sala: ${roomCode}`);
+      navigation.navigate('WaitingRoom', { gameId });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error desconocido';
       Alert.alert('Error al crear sala', message);

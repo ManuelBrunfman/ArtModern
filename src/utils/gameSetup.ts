@@ -1,53 +1,81 @@
+// -----------------------------------------------------------------------------
 // src/utils/gameSetup.ts
+// Lógica de mazo + reparto de cartas iniciales
+// -----------------------------------------------------------------------------
 import firestore from '@react-native-firebase/firestore';
 
-type Card = {
-  id: string;
-  title: string;
-  artist: string;
-  auctionType: 'open' | 'sealed' | 'once' | 'double';
+/* -------------------------------------------------------------------------- */
+/* 1. Mazo de Modern Art                                                     */
+/* -------------------------------------------------------------------------- */
+const ARTISTS = ['Krypto', 'Yoko', 'Karl', 'Christin P.', 'Lite Metal'];
+
+/** Devuelve un mazo de 60 cartas (5 artistas × 12) */
+export const generateDeck = () => {
+  const deck = [];
+  let id = 1;
+  for (const artist of ARTISTS) {
+    for (let i = 0; i < 12; i++) {
+      deck.push({ id: id++, artist });      // { id: 17, artist: 'Yoko' }
+    }
+  }
+  return deck;
 };
 
-const allAuctionTypes = ['open', 'sealed', 'once', 'double'] as const;
-const artists = ['Van Gogh', 'Picasso', 'Kahlo', 'Dalí', 'Matisse'];
-
-function generateDeck(): Card[] {
-  const deck: Card[] = [];
-  let idCounter = 1;
-
-  for (let i = 0; i < 50; i++) {
-    const artist = artists[i % artists.length];
-    const auctionType = allAuctionTypes[i % allAuctionTypes.length];
-    deck.push({
-      id: `card-${idCounter++}`,
-      title: `Obra ${i + 1}`,
-      artist,
-      auctionType,
-    });
+/** Mezcla el mazo (Fisher‑Yates) */
+export const shuffle = <T,>(array: T[]): T[] => {
+  const clone = [...array];
+  for (let i = clone.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [clone[i], clone[j]] = [clone[j], clone[i]];
   }
+  return clone;
+};
 
-  return deck;
-}
+/* -------------------------------------------------------------------------- */
+/* 2. Reparto de 10 cartas a cada jugador                                     */
+/* -------------------------------------------------------------------------- */
+const CARDS_PER_PLAYER = 10;
 
 export async function dealInitialHands(gameId: string) {
-  const gameRef = firestore().collection('games').doc(gameId);
-  const doc = await gameRef.get();
-  const gameData = doc.data();
-  if (!gameData) return;
+  console.log('🃏 dealInitialHands →', gameId);
 
-  const deck = generateDeck();
-  const shuffled = deck.sort(() => Math.random() - 0.5);
-  const players = gameData.players;
-  const cardsPerPlayer = 10;
+  try {
+    /* 1️⃣ Traer la partida */
+    const gameRef = firestore().collection('games').doc(gameId);
+    const snap    = await gameRef.get();
+    const game    = snap.data();
 
-  const playersWithHands = players.map((p: any, i: number) => {
-    const start = i * cardsPerPlayer;
-    const end = start + cardsPerPlayer;
-    const hand = shuffled.slice(start, end);
-    return { ...p, hand };
-  });
+    if (!game) {
+      console.warn('❌ gameData vacío');
+      return;
+    }
 
-  await gameRef.update({
-    players: playersWithHands,
-  });
+    const players: any[] = game.players ?? [];
+    const deck           = shuffle(generateDeck());
+
+    /* 2️⃣ Comprobación de tamaño */
+    if (players.length * CARDS_PER_PLAYER > deck.length) {
+      console.warn(
+        `⚠️ No hay suficientes cartas: ${players.length} jugadores × ${CARDS_PER_PLAYER
+        } = ${players.length * CARDS_PER_PLAYER} > ${deck.length}`
+      );
+      return;
+    }
+
+    /* 3️⃣ Asignar mano */
+    const playersWithHands = players.map((p, i) => {
+      const start = i * CARDS_PER_PLAYER;
+      const end   = start + CARDS_PER_PLAYER;
+      const hand  = deck.slice(start, end);
+      console.log(`🎴 ${p.name} recibe ${hand.length} cartas`);
+      return { ...p, hand };
+    });
+
+    /* 4️⃣ Guardar */
+    await gameRef.update({ players: playersWithHands });
+    console.log('✅ Manos guardadas en Firestore');
+  } catch (err) {
+    console.error('❌ dealInitialHands error', err);
+    throw err; // propagamos para que la pantalla muestre el Alert
+  }
 }
