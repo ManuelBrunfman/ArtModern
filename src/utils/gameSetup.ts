@@ -1,65 +1,59 @@
 // src/utils/gameSetup.ts
 import firestore from '@react-native-firebase/firestore';
 
-export type Card = {
-  id: number;
+type Card = {
+  id: string;
+  title: string;
   artist: string;
-  auctionType: 'open' | 'sealed' | 'once' | 'double';
+  auctionType: 'open' | 'sealed' | 'once' | 'double' | 'fixed';
 };
 
-const ARTISTS = ['Krypto', 'Yoko', 'Karl', 'Christin P.', 'Lite Metal'];
-const AUCTION_TYPES: Card['auctionType'][] = ['open', 'sealed', 'once', 'double'];
+const allAuctionTypes = ['open', 'sealed', 'once', 'double', 'fixed'] as const;
+const artists = ['Van Gogh', 'Picasso', 'Kahlo', 'Dalí', 'Matisse'];
+const CARDS_PER_PLAYER = 10;
 
-/** Devuelve un mazo de 60 cartas (5 artistas × 12) */
-export const generateDeck = (): Card[] => {
+function generateDeck(): Card[] {
   const deck: Card[] = [];
-  let id = 1;
-  for (const artist of ARTISTS) {
-    for (let i = 0; i < 12; i++) {
-      const auctionType = AUCTION_TYPES[(id - 1) % AUCTION_TYPES.length];
-      deck.push({ id: id++, artist, auctionType });
-    }
-  }
-  return deck;
-};
+  let idCounter = 1;
 
-export const shuffle = <T,>(array: T[]): T[] => {
-  const clone = [...array];
-  for (let i = clone.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [clone[i], clone[j]] = [clone[j], clone[i]];
+  for (let i = 0; i < 100; i++) {
+    const artist = artists[i % artists.length];
+    const auctionType = allAuctionTypes[i % allAuctionTypes.length];
+    deck.push({
+      id: `card-${idCounter++}`,
+      title: `Obra ${i + 1}`,
+      artist,
+      auctionType,
+    });
   }
-  return clone;
-};
+
+  return deck;
+}
 
 export async function dealInitialHands(gameId: string) {
-  console.log('🃏 dealInitialHands →', gameId);
-
   const gameRef = firestore().collection('games').doc(gameId);
-  const doc = await gameRef.get();
-  const gameData = doc.data();
+  const snapshot = await gameRef.get();
+  const game = snapshot.data();
 
-  if (!gameData) {
-    console.warn('❌ gameData vacío');
-    return;
-  }
+  if (!game) return;
 
-  const deck = shuffle(generateDeck());
-  const players = gameData.players ?? [];
-  const CARDS_PER_PLAYER = 10;
-
-  if (players.length * CARDS_PER_PLAYER > deck.length) {
-    console.warn(`⚠️ No hay suficientes cartas`);
-    return;
-  }
-
-  const playersWithHands = players.map((p: any, i: number) => {
-    const start = i * CARDS_PER_PLAYER;
-    const end = start + CARDS_PER_PLAYER;
-    const hand = deck.slice(start, end);
-    return { ...p, hand };
+  const deck = generateDeck();
+  const shuffled = deck.sort(() => Math.random() - 0.5);
+  const players = game.players;
+  const updatedPlayers = players.map((p: any, i: number) => {
+    const hand = shuffled.slice(i * CARDS_PER_PLAYER, (i + 1) * CARDS_PER_PLAYER);
+    return {
+      ...p,
+      hand,
+      collection: [],
+      money: 100,
+    };
   });
 
-  await gameRef.update({ players: playersWithHands });
-  console.log('✅ Manos guardadas en Firestore');
+  const remainingDeck = shuffled.slice(CARDS_PER_PLAYER * players.length);
+
+  await gameRef.update({
+    players: updatedPlayers,
+    deck: remainingDeck,
+  });
 }

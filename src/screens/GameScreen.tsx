@@ -1,330 +1,284 @@
-// -----------------------------------------------------------------------------
-// src/screens/GameScreen.tsx  (versión completa v2)
-// -----------------------------------------------------------------------------
-import React, { useEffect, useState, useMemo } from 'react';
+// src/screens/GameScreen.tsx
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
-  Button,
-  Alert,
-  FlatList,
-  TouchableOpacity,
   StyleSheet,
+  Button,
+  FlatList,
+  Alert,
   TextInput,
+  TouchableOpacity,
+  ActivityIndicator,
+  ViewStyle,
+  StyleProp,
 } from 'react-native';
 import firestore from '@react-native-firebase/firestore';
-import { useRoute } from '@react-navigation/native';
+import {
+  useRoute,
+  useNavigation,
+  RouteProp,
+} from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
-import type { RouteProp } from '@react-navigation/native';
+import { checkAndAdvanceRound } from '../utils/roundManager';
+import type {
+  NativeStackNavigationProp,
+} from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 
-/* -------------------------------------------------------------------------- */
-/* 1. Tipos                                                                  */
-/* -------------------------------------------------------------------------- */
-export type AuctionType = 'open' | 'sealed' | 'once' | 'double';
+// --- Types ---
+type GameScreenRouteProp = RouteProp<RootStackParamList, 'Game'>;
+type GameScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Game'>;
 
-export type Card = {
-  id: number;
+type AuctionType = 'open' | 'sealed' | 'once' | 'fixed' | 'double';
+
+interface CardType {
+  id: string;
+  title: string;
   artist: string;
   auctionType: AuctionType;
-};
+  value: number;
+}
 
-export type Player = {
+interface Player {
   uid: string;
   name: string;
+  hand: CardType[];
   money: number;
-  hand: Card[];
-  collection: Card[];
-  isHost: boolean;
-};
+  collection?: { title: string; artist: string }[];
+}
 
-export type Bid = {
-  uid: string;
-  name: string;
-  amount: number;
-};
+interface Auction {
+  artwork: string;
+  artist: string;
+  type: AuctionType;
+  sellerId: string;
+  bids: Record<string, number>;
+  highestBid: number;
+  highestBidder: string | null;
+  turnIndex: number;
+  fixedPrice: number;
+}
 
-/* -------------------------------------------------------------------------- */
-/* 2. Utilidades                                                              */
-/* -------------------------------------------------------------------------- */
-const getNextPlayerUid = (players: Player[], currentUid: string): string => {
-  const idx = players.findIndex((p) => p.uid === currentUid);
-  const nextIdx = (idx + 1) % players.length;
-  return players[nextIdx].uid;
-};
+interface GameData {
+  status?: 'waiting' | 'inProgress' | 'finished';
+  round: number;
+  players: Player[];
+  currentTurn: string;
+  currentAuction?: Auction;
+  artistCounts?: Record<string, number>;
+}
 
-/* -------------------------------------------------------------------------- */
-/* 3. Componente                                                              */
-/* -------------------------------------------------------------------------- */
-const GameScreen = () => {
+export default function GameScreen() {
+  const route = useRoute<GameScreenRouteProp>();
+  const navigation = useNavigation<GameScreenNavigationProp>();
   const { user } = useAuth();
-  const route = useRoute<RouteProp<RootStackParamList, 'Game'>>();
   const { gameId } = route.params;
 
-  const [game, setGame] = useState<any | null>(null);
-  const [selectedCard, setSelectedCard] = useState<Card | null>(null);
-  const [bidAmount, setBidAmount] = useState<string>('');
+  const [game, setGame] = useState<GameData | null>(null);
+  const [selectedCard, setSelectedCard] = useState<CardType | null>(null);
+  const [secondCard, setSecondCard] = useState<CardType | null>(null);
+  const [bidInput, setBidInput] = useState('');
 
-  /* ---------------------------------------------------------------------- */
-  /* Suscripción a la partida                                                */
-  /* ---------------------------------------------------------------------- */
+  if (!user) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
+  const uid = user.uid;
+
+  // Subscribe to game updates
   useEffect(() => {
-    const unsub = firestore()
-      .collection('games')
-      .doc(gameId)
-      .onSnapshot((doc) => setGame(doc.data()));
-    return () => unsub();
-  }, [gameId]);
+    const gameRef = firestore().doc(`games/${gameId}`);
+    const unsubscribe = gameRef.onSnapshot(doc => {
+      const data = doc.data() as GameData | undefined;
+      if (data) {
+        setGame(data);
+        if (data.status === 'finished') {
+          navigation.replace('EndGame', { gameId });
+        }
+      }
+    });
+    return () => unsubscribe();
+  }, [gameId, navigation]);
 
-  /* ---------------------------------------------------------------------- */
-  /* Memo helpers                                                            */
-  /* ---------------------------------------------------------------------- */
-  const isMyTurn = useMemo(() => game?.currentTurn === user?.uid, [game, user]);
-  const currentPlayer: Player | undefined = useMemo(
-    () => game?.players?.find((p: Player) => p.uid === user?.uid),
-    [game, user]
-  );
-  const hand: Card[] = currentPlayer?.hand ?? [];
+  if (!game) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
 
-  if (!game || !user || !currentPlayer) return null;
+  const player = game.players.find(p => p.uid === uid)!;
+  const isMyTurn = uid === game.currentTurn;
+  const auction = game.currentAuction;
 
-  /* ---------------------------------------------------------------------- */
-  /* 4. Iniciar subasta                                                      */
-  /* ---------------------------------------------------------------------- */
+  // Start auction
   const startAuction = async () => {
-    try {
-      if (!isMyTurn) {
-        Alert.alert('Espera tu turno');
+    if (!selectedCard) return;
+    const cards = [selectedCard];
+    let type = selectedCard.auctionType;
+    if (type === 'double') {
+      if (!secondCard || secondCard.artist !== selectedCard.artist) {
+        Alert.alert('Selecciona una segunda carta del mismo artista');
         return;
       }
-      if (game.currentAuction) {
-        Alert.alert('Ya hay una subasta en curso');
-        return;
-      }
-      if (!selectedCard) {
-        Alert.alert('Selecciona una carta');
-        return;
-      }
-
-      // Remover carta de la mano del jugador
-      const updatedPlayers: Player[] = game.players.map((p: Player) =>
-        p.uid === user.uid ? { ...p, hand: p.hand.filter((c) => c.id !== selectedCard.id) } : p
-      );
-
-      await firestore().collection('games').doc(gameId).update({
-        players: updatedPlayers,
-        currentAuction: {
-          card: selectedCard,
-          seller: user.uid,
-          auctionType: selectedCard.auctionType,
-          bids: [] as Bid[],
-          highestBid: null,
-          highestBidder: null,
-        },
-      });
-      setSelectedCard(null);
-    } catch (err) {
-      console.error(err);
-      Alert.alert('Error al iniciar la subasta');
+      cards.push(secondCard);
+      type = secondCard.auctionType;
     }
+    const newHand = player.hand.filter(c => !cards.some(sc => sc.id === c.id));
+    const updatedPlayers = game.players.map(p =>
+      p.uid === uid ? { ...p, hand: newHand } : p
+    );
+    const newAuction: Auction = {
+      artwork: cards.map(c => c.title).join(' + '),
+      artist: selectedCard.artist,
+      type,
+      sellerId: uid,
+      bids: {},
+      highestBid: 0,
+      highestBidder: null,
+      turnIndex: 0,
+      fixedPrice: 200,
+    };
+    await firestore().doc(`games/${gameId}`).update({
+      players: updatedPlayers,
+      currentAuction: newAuction,
+    });
+    setSelectedCard(null);
+    setSecondCard(null);
   };
 
-  /* ---------------------------------------------------------------------- */
-  /* 5. Ofertar                                                              */
-  /* ---------------------------------------------------------------------- */
-  const placeBid = async () => {
-    try {
-      if (!game.currentAuction) return;
-      if (game.currentAuction.seller === user.uid) return; // el vendedor no oferta
-      const amount = parseInt(bidAmount, 10);
-      if (isNaN(amount) || amount <= 0) {
-        Alert.alert('Ingresa una oferta válida');
-        return;
-      }
-      if (amount > currentPlayer.money) {
-        Alert.alert('No tienes suficiente dinero');
-        return;
-      }
-      const highest = game.currentAuction.highestBid ?? 0;
-      if (amount <= highest) {
-        Alert.alert('Debe superar la oferta más alta');
-        return;
-      }
-
-      await firestore().collection('games').doc(gameId).update({
-        'currentAuction.highestBid': amount,
-        'currentAuction.highestBidder': user.uid,
-        'currentAuction.bids': firestore.FieldValue.arrayUnion({
-          uid: user.uid,
-          name: currentPlayer.name,
-          amount,
-        }),
-      });
-      setBidAmount('');
-    } catch (e) {
-      console.error(e);
-      Alert.alert('Error al ofertar');
+  // Submit bid
+  const submitBid = async () => {
+    if (!auction) return;
+    const amount = parseInt(bidInput, 10);
+    if (isNaN(amount) || amount > player.money) return;
+    if (uid === auction.sellerId) {
+      Alert.alert('El vendedor no puede pujar');
+      return;
     }
+    const update: Partial<Auction> = {};
+    update.highestBid = amount;
+    update.highestBidder = uid;
+    const merged = { ...auction, ...update };
+    await firestore().doc(`games/${gameId}`).update({ currentAuction: merged });
+    setBidInput('');
   };
 
-  /* ---------------------------------------------------------------------- */
-  /* 6. Finalizar subasta (solo vendedor)                                    */
-  /* ---------------------------------------------------------------------- */
+  // Cancel auction
+  const cancelAuction = async () => {
+    await firestore().doc(`games/${gameId}`).update({ currentAuction: firestore.FieldValue.delete() });
+  };
+
+  // Finish auction and rotate turn
   const finishAuction = async () => {
-    try {
-      const auction = game.currentAuction;
-      if (!auction) return;
-      if (auction.seller !== user.uid) return;
-
-      const { highestBid, highestBidder, card } = auction;
-      let updatedPlayers: Player[] = [...game.players];
-
-      if (highestBidder) {
-        updatedPlayers = updatedPlayers.map((p) => {
-          if (p.uid === highestBidder) {
-            return {
-              ...p,
-              money: p.money - highestBid,
-              collection: [...(p.collection || []), card],
-            } as Player;
-          }
-          if (p.uid === user.uid) {
-            return { ...p, money: p.money + highestBid } as Player;
-          }
-          return p;
-        });
-      } else {
-        // Sin ofertas: el vendedor se queda con la carta (opción reglamento)
-        updatedPlayers = updatedPlayers.map((p) =>
-          p.uid === user.uid ? { ...p, collection: [...(p.collection || []), card] } : p
-        );
+    if (!auction) return;
+    let winner = auction.highestBidder;
+    let max = auction.highestBid;
+    // For sealed and once auctions, determine winner
+    if (auction.type !== 'open') {
+      for (const [bidder, val] of Object.entries(auction.bids)) {
+        if (val > max) {
+          max = val;
+          winner = bidder;
+        }
       }
-
-      const nextTurn = getNextPlayerUid(updatedPlayers, user.uid);
-
-      await firestore().collection('games').doc(gameId).update({
-        players: updatedPlayers,
-        currentAuction: null,
-        currentTurn: nextTurn,
-      });
-    } catch (e) {
-      console.error(e);
-      Alert.alert('Error al finalizar la subasta');
     }
+    if (!winner) {
+      await cancelAuction();
+      return;
+    }
+    // Update players' collections and balances
+    const wonItems = auction.artwork.split(' + ').map(title => ({ title, artist: auction.artist }));
+    const updatedPlayers = game.players.map(p => {
+      if (p.uid === winner) return { ...p, money: p.money - max, collection: [...(p.collection || []), ...wonItems] };
+      if (p.uid === auction.sellerId) return { ...p, money: p.money + max };
+      return p;
+    });
+    const nextIndex = (game.players.findIndex(p => p.uid === auction.sellerId) + 1) % game.players.length;
+    const nextTurn = game.players[nextIndex].uid;
+    const newCounts = { ...(game.artistCounts || {}), [auction.artist]: (game.artistCounts?.[auction.artist] || 0) + 1 };
+    await firestore().doc(`games/${gameId}`).update({
+      players: updatedPlayers,
+      currentAuction: firestore.FieldValue.delete(),
+      currentTurn: nextTurn,
+      artistCounts: newCounts,
+    });
+    await checkAndAdvanceRound(gameId);
   };
 
-  /* ---------------------------------------------------------------------- */
-  /* 7. UI                                                                   */
-  /* ---------------------------------------------------------------------- */
+  // Render player's hand card
+  const renderCard = ({ item }: { item: CardType }) => {
+    const cardStyles: StyleProp<ViewStyle>[] = [styles.card];
+    if (selectedCard?.id === item.id || secondCard?.id === item.id) cardStyles.push(styles.selectedCard);
+    return (
+      <TouchableOpacity onPress={() => (selectedCard ? setSecondCard(item) : setSelectedCard(item))} style={cardStyles as StyleProp<ViewStyle>}>
+        <Text style={styles.cardTitle}>{item.title}</Text>
+        <Text style={styles.cardArtist}>{item.artist}</Text>
+        <Text style={styles.cardType}>{item.auctionType}</Text>
+      </TouchableOpacity>
+    );
+  };
+
   return (
     <View style={styles.container}>
-      {/* Información de jugador */}
-      <Text style={styles.money}>Dinero: ${currentPlayer.money}</Text>
+      <Text style={styles.title}>Ronda {game.round} – Turno de: {game.players.find(p => p.uid === game.currentTurn)?.name}</Text>
 
-      {/* Mano */}
-      <Text style={styles.title}>Tu mano ({hand.length})</Text>
-      <FlatList
-        data={hand}
-        keyExtractor={(item) => item.id.toString()}
-        horizontal
-        contentContainerStyle={styles.cardsRow}
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            style={[styles.card, selectedCard?.id === item.id && styles.selected]}
-            onPress={() => setSelectedCard(item)}
-          >
-            <Text style={styles.cardArtist}>{item.artist}</Text>
-            <Text style={styles.cardType}>{item.auctionType}</Text>
-          </TouchableOpacity>
-        )}
-      />
-
-      {/* Botón para iniciar subasta */}
-      {isMyTurn && (
-        <Button
-          title="Iniciar Subasta"
-          onPress={startAuction}
-          disabled={!selectedCard || !!game.currentAuction}
-        />
-      )}
-
-      {/* Bloque de subasta en curso */}
-      {game.currentAuction && (
-        <View style={styles.auctionBox}>
-          <Text style={styles.subtitle}>🔨 Subasta en curso</Text>
-          <Text>Artista: {game.currentAuction.card.artist}</Text>
-          <Text>Tipo: {game.currentAuction.auctionType}</Text>
-          <Text>
-            Vendedor:{' '}
-            {game.currentAuction.seller === user.uid ? 'Tú' : game.currentAuction.seller}
-          </Text>
-          <Text>Oferta más alta: {game.currentAuction.highestBid ?? '—'}</Text>
-
-          {/* Ofertar */}
-          {game.currentAuction.seller !== user.uid && (
-            <View style={styles.bidRow}>
-              <TextInput
-                style={styles.input}
-                keyboardType="numeric"
-                placeholder="Tu oferta"
-                value={bidAmount}
-                onChangeText={setBidAmount}
-              />
-              <Button title="Ofertar" onPress={placeBid} />
+      {auction ? (
+        <View style={styles.auctionContainer}>
+          <Text style={styles.subtitle}>Obra: {auction.artwork}</Text>
+          <Text style={styles.subtitle}>Última puja: ${auction.highestBid} por {game.players.find(p => p.uid === auction.highestBidder)?.name}</Text>
+          <TextInput
+            placeholder="Ingresa tu oferta"
+            value={bidInput}
+            onChangeText={setBidInput}
+            keyboardType="numeric"
+            style={styles.input}
+          />
+          <Button title="Ofertar" onPress={submitBid} />
+          {uid === auction.sellerId && (
+            <View style={styles.sellerActions}>
+              <Button title="Finalizar" onPress={finishAuction} />
+              <Button title="Cancelar" color="#B00020" onPress={cancelAuction} />
             </View>
           )}
-
-          {/* Finalizar (solo vendedor) */}
-          {game.currentAuction.seller === user.uid && (
-            <Button
-              title="Finalizar Subasta"
-              onPress={finishAuction}
-              disabled={!game.currentAuction.highestBidder && !game.currentAuction.highestBid}
-            />
-          )}
+        </View>
+      ) : (
+        <View style={styles.handContainer}>
+          <Text style={styles.subtitle}>Tu mano</Text>
+          <FlatList<CardType>
+            data={player.hand}
+            renderItem={renderCard}
+            keyExtractor={item => item.id}
+            horizontal
+            contentContainerStyle={styles.handList}
+          />
+          {isMyTurn && <Button title="Iniciar subasta" onPress={startAuction} disabled={!selectedCard || (selectedCard.auctionType === 'double' && !secondCard)} />}
         </View>
       )}
+
+      <Text style={styles.subtitle}>Saldo: ${player.money}</Text>
     </View>
   );
-};
+}
 
-export default GameScreen;
-
-/* -------------------------------------------------------------------------- */
-/* 8. Estilos                                                                */
-/* -------------------------------------------------------------------------- */
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, backgroundColor: '#fff' },
-  money: { fontSize: 16, fontWeight: '600', marginBottom: 8 },
-  title: { fontSize: 18, fontWeight: 'bold', marginBottom: 10 },
-  subtitle: { fontSize: 16, fontWeight: '600', marginBottom: 6 },
-  cardsRow: { gap: 8, paddingBottom: 16 },
-  card: {
-    backgroundColor: '#f2f2f2',
-    padding: 14,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    minWidth: 90,
-    alignItems: 'center',
-  },
-  selected: { borderColor: 'dodgerblue', borderWidth: 2 },
-  cardArtist: { fontSize: 14, fontWeight: '700' },
-  cardType: { fontSize: 12, color: '#555' },
-  auctionBox: {
-    marginTop: 20,
-    padding: 16,
-    backgroundColor: '#ffefd5',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#f0c87a',
-  },
-  bidRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10, gap: 8 },
-  input: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    padding: 8,
-    borderRadius: 6,
-  },
+  container: { flex: 1, padding: 20 },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  title: { fontSize: 20, fontWeight: 'bold', marginBottom: 10 },
+  subtitle: { fontSize: 16, marginVertical: 8 },
+  input: { borderWidth: 1, borderColor: '#999', padding: 8, borderRadius: 5, marginVertical: 10 },
+  auctionContainer: { padding: 16, backgroundColor: '#fff', borderRadius: 8, marginVertical: 10 },
+  sellerActions: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
+  handContainer: { marginVertical: 10 },
+  handList: { paddingVertical: 8 },
+  card: { padding: 10, margin: 6, borderWidth: 1, borderColor: '#aaa', borderRadius: 6, backgroundColor: '#f9f9f9', minWidth: 100, alignItems: 'center' },
+  selectedCard: { borderColor: '#4CAF50', borderWidth: 2 },
+  cardTitle: { fontWeight: 'bold' },
+  cardArtist: { fontSize: 12, color: '#555' },
+  cardType: { fontSize: 10, color: '#888' },
 });

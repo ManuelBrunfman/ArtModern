@@ -23,6 +23,8 @@ export interface Player {
   money: number;
   hand: Card[];
   soldCards: Card[];
+  collection: Card[]; // Asegurar esta línea existe
+
   isHost?: boolean;
 }
 
@@ -43,6 +45,8 @@ export interface Auction {
   resolved: boolean;
   turnOrder?: string[]; // Para subasta a una vuelta
   currentTurnIndex?: number;
+  fixedPrice?: number; // 👈 Añadir esta línea
+
 }
 
 // Partida en Firestore

@@ -1,3 +1,5 @@
+
+//navigation/types.ts
 export type RootStackParamList = {
     Lobby: undefined;
     CreateRoom: undefined;

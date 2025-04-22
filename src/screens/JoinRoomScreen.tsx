@@ -1,3 +1,4 @@
+// src/screens/JoinRoomScreen.tsx
 import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, Button, Alert, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
@@ -46,7 +47,7 @@ const JoinRoomScreen = () => {
         sanitizeNullableString(user.displayName),
         sanitizeNullableString(user.photoURL)
       );
-      navigation.navigate('WaitingRoom', { gameId });
+      navigation.navigate('RoomLobby', { gameId });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error al unirse a la sala';
       Alert.alert('Error', message);

@@ -1,8 +1,10 @@
-import { registerRootComponent } from 'expo';
+// index.tsx (entry point)
 
-import App from './App';
+// Silencia warnings de deprecación del API namespaced de React Native Firebase
+;(globalThis as any).RNFB_SILENCE_MODULAR_DEPRECATION_WARNINGS = true;
 
-// registerRootComponent calls AppRegistry.registerComponent('main', () => App);
-// It also ensures that whether you load the app in Expo Go or in a native build,
-// the environment is set up appropriately
-registerRootComponent(App);
+import { AppRegistry } from 'react-native';
+import App from './App'; // Ajusta la ruta a tu componente raíz
+const appName = require('./app.json').name;
+
+AppRegistry.registerComponent('main', () => App);

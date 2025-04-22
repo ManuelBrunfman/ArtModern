@@ -1,3 +1,4 @@
+// src/screens/CreateRoomScreen.tsx
 import React from 'react';
 import { View, Text, Button, StyleSheet, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
@@ -13,21 +14,22 @@ export default function CreateRoomScreen() {
 
   const handleCreateRoom = async () => {
     if (!user) return;
-
+  
     try {
       const { gameId, roomCode } = await createRoom(
         user.uid,
         sanitizeNullableString(user.displayName),
         sanitizeNullableString(user.photoURL)
       );
-
-      Alert.alert('Sala creada', `Código de sala: ${roomCode}`);
-      navigation.navigate('WaitingRoom', { gameId });
+  
+      Alert.alert('Sala creada', `Código: ${roomCode}`);
+      navigation.navigate('RoomLobby', { gameId }); // ✅ ahora sí pasa un string
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error desconocido';
       Alert.alert('Error al crear sala', message);
     }
   };
+  
 
   return (
     <View style={styles.container}>
