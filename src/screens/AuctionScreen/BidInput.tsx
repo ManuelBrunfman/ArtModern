@@ -1,46 +1,72 @@
+/**
+ * Input de puja para open / sealed / once.
+ * • Muestra el saldo disponible.
+ * • Usa teclado numérico y no cierra el pad al teclear.
+ */
 import React, { useState } from 'react';
-import { View, TextInput, Button, StyleSheet } from 'react-native';
+import { View, TextInput, Button, StyleSheet, Text } from 'react-native';
+
+export type AuctionType = 'open' | 'sealed' | 'once' | 'fixed' | 'double';
 
 interface Props {
-  type: string;
-  onSubmit: (amount: number) => void;
+  type: AuctionType;
+  fixedPrice: number;
   disabled: boolean;
-  fixedPrice?: number;
+  onSubmit: (amount: number) => void;
+  currentMoney: number;
 }
 
-const BidInput: React.FC<Props> = ({ type, onSubmit, disabled, fixedPrice }) => {
-  const [value, setValue] = useState('');
+export default function BidInput({
+  type,
+  fixedPrice,
+  disabled,
+  onSubmit,
+  currentMoney,
+}: Props) {
+  const [text, setText] = useState('');
+
+  const placeholder =
+    type === 'sealed' ? 'Puja secreta' : 'Ingresa tu oferta';
+
+  const handleSend = () => {
+    const n = parseInt(text, 10);
+    if (!isNaN(n)) onSubmit(n);
+    setText('');
+  };
+
   return (
-    <View style={styles.container}>
-      {type === 'fixed' ? (
-        <Button
-          title={`Comprar a $${fixedPrice}`}
-          onPress={() => onSubmit(fixedPrice!)}
-          disabled={disabled}
+    <View style={styles.box}>
+      <Text style={styles.money}>Tu saldo: €{currentMoney}</Text>
+
+      <View style={styles.row}>
+        <TextInput
+          style={styles.input}
+          value={text}
+          onChangeText={setText}
+          placeholder={placeholder}
+          keyboardType="number-pad"
+          editable={!disabled}
+          // no ponemos "value" vacío al tocar send ⇒ el teclado NO se cierra
         />
-      ) : (
-        <>
-          <TextInput
-            style={styles.input}
-            value={value}
-            onChangeText={setValue}
-            keyboardType="numeric"
-            editable={!disabled}
-          />
-          <Button
-            title="Ofertar"
-            onPress={() => onSubmit(parseInt(value, 10))}
-            disabled={disabled || !value}
-          />
-        </>
-      )}
+        <Button
+          title="Ofertar"
+          onPress={handleSend}
+          disabled={disabled || text.trim() === ''}
+        />
+      </View>
     </View>
   );
-};
+}
 
 const styles = StyleSheet.create({
-  container: { flexDirection: 'row', alignItems: 'center', marginVertical: 8 },
-  input: { flex: 1, borderWidth: 1, borderColor: '#999', padding: 4, marginRight: 8 }
+  box: { width: '100%', marginVertical: 8 },
+  money: { textAlign: 'center', marginBottom: 4, fontWeight: '600' },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  input: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#999',
+    borderRadius: 4,
+    padding: 6,
+  },
 });
-
-export default BidInput;

@@ -1,41 +1,41 @@
-import React, { useEffect, useRef } from 'react';
-import { View, Text, Animated, StyleSheet } from 'react-native';
+/**
+ * Timer con barra de progreso de duración configurable.
+ * • Llama opcionalmente a onTimeout() cuando llega a 0 s.
+ */
+
+import React, { useEffect } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
 
 interface Props {
-  timeLeft: number;
-  duration: number;
-  onTimeout: () => void;
+  timeLeft : number;          // segundos restantes
+  duration : number;          // duración total
+  onTimeout?: () => void;     // opcional
 }
 
-const AuctionTimer: React.FC<Props> = ({ timeLeft, duration, onTimeout }) => {
-  const anim = useRef(new Animated.Value(1)).current;
-
+export default function AuctionTimer({ timeLeft, duration, onTimeout }: Props) {
+  // dispara callback externo si existe
   useEffect(() => {
-    anim.setValue(1);
-    Animated.timing(anim, {
-      toValue: 0,
-      duration: duration * 1000,
-      useNativeDriver: false
-    }).start(({ finished }) => finished && onTimeout());
-  }, [timeLeft]);
+    if (timeLeft === 0) onTimeout?.();
+  }, [timeLeft, onTimeout]);
 
-  const width = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0%', '100%']
-  });
+  const progress = timeLeft / duration; // 1 → 0
 
   return (
     <View style={styles.container}>
-      <Animated.View style={[styles.bar, { width }]} />
-      <Text style={styles.text}>{Math.ceil(timeLeft)}</Text>
+      <Text style={styles.counter}>{timeLeft}s</Text>
+      <View style={styles.bar}>
+        <View style={[styles.fill, { flex: progress }]} />
+        <View style={{ flex: 1 - progress }} />
+      </View>
     </View>
   );
-};
+}
 
 const styles = StyleSheet.create({
-  container: { flexDirection: 'row', alignItems: 'center', marginVertical: 8 },
-  bar: { height: 5, backgroundColor: '#4CAF50', flex: 1, marginRight: 8 },
-  text: { width: 35, textAlign: 'right' }
+  container:{ alignItems:'center', marginBottom:8 },
+  counter  :{ fontWeight:'700', fontSize:16 },
+  bar      :{ flexDirection:'row', height:6, width:'100%',
+              backgroundColor:'#ddd', borderRadius:3, overflow:'hidden',
+              marginTop:4 },
+  fill     :{ backgroundColor:'#4CAF50' },
 });
-
-export default AuctionTimer;

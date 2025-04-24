@@ -1,277 +1,346 @@
 // src/screens/AuctionScreen/AuctionScreen.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ActivityIndicator,
-  Alert,
-  TextInput,
-  Button,
+  View, Text, StyleSheet, ActivityIndicator,
+  Alert, TextInput, Button,
 } from 'react-native';
-import firestore, { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
-import AuctionTimer from './AuctionTimer';
-import AuctionHeader from './AuctionHeader';
+import firestore from '@react-native-firebase/firestore';
+
+import AuctionHeader    from './AuctionHeader';
+import AuctionTimer     from './AuctionTimer';
 import AuctionStateInfo from './AuctionStateInfo';
-import BidList from './BidList';
-import BidInput from './BidInput';
-import SellerActions from './SellerActions';
-import TieBreakModal from './TieBreakModal';
+import BidList          from './BidList';
+import BidInput         from './BidInput';
+import SellerActions    from './SellerActions';
+import TieBreakModal    from './TieBreakModal';
 import { checkAndAdvanceRound } from '../../utils/roundManager';
 
-interface AuctionScreenProps { gameId: string; userId: string; }
+/* ─────────── Tipos ─────────── */
+export type AuctionType = 'open' | 'sealed' | 'once' | 'fixed' | 'double';
 
-type AuctionType = 'open' | 'sealed' | 'once' | 'fixed' | 'double';
 interface Auction {
-  artwork: string;
-  artist: string;
-  type: AuctionType;
-  sellerId: string;
-  bids: Record<string, number>;
-  highestBid: number;
-  highestBidder: string | null;
-  turnIndex: number;
-  fixedPrice: number;
-  cardCount: number;
-  tiedBidders?: string[];
-}
-interface Player { uid: string; name: string; money: number; }
-interface GameData {
-  round: number;
-  players: Player[];
-  currentTurn: string;
-  currentTurnIndex: number;
-  currentAuction?: Auction;
-  artistCounts?: Record<string, number>;
+  artwork:string; artist:string; type:AuctionType; sellerId:string;
+  bids:Record<string,number>; highestBid:number; highestBidder:string|null;
+  fixedPrice:number; cardCount:number; tiedBidders?:string[];
 }
 
-export default function AuctionScreen({ gameId, userId }: AuctionScreenProps) {
-  const [auction, setAuction] = useState<Auction | null>(null);
+interface Player { uid:string; name:string; money:number; }
+
+interface GameData {
+  round:number; players:Player[]; currentTurn:string; currentTurnIndex:number;
+  currentAuction?:Auction; artistCounts:Record<string,number>;
+}
+
+interface Props { gameId:string; userId:string; }
+
+/* ─────────── helpers ─────────── */
+function advanceTurn(g: GameData, sellerId: string) {
+  const idx = g.players.findIndex(p => p.uid === sellerId);
+  const nextIdx = (idx + 1) % g.players.length;
+  return { uid: g.players[nextIdx].uid, index: nextIdx };
+}
+
+const validateBid = (a: Auction, uid: string, amt: number, bal: number): string | null => {
+  if (amt <= 0) return 'La oferta debe ser mayor que cero';
+  if ((a.type === 'once' || a.type === 'sealed') && a.bids[uid] !== undefined)
+    return 'Solo puedes ofertar una vez';
+  if (amt > bal) return 'Fondos insuficientes';
+  if ((a.type === 'open' || a.type === 'double') && amt <= a.highestBid)
+    return 'Debes superar la oferta actual';
+  if (a.type === 'fixed' && amt !== a.fixedPrice)
+    return 'Debes pagar exactamente el precio fijo';
+  return null;
+};
+
+const determineWinner = (a: Auction, players: Player[], forced?: string) => {
+  let winner: string | null = forced ?? null;
+  let price = 0;
+  const bids = Object.entries(a.bids);
+
+  const resolveTurnOrder = (ties: string[]) => {
+    const sIdx = players.findIndex(p => p.uid === a.sellerId);
+    return ties.sort((u, v) => {
+      const dist = (id: string) =>
+        (players.findIndex(p => p.uid === id) - sIdx + players.length) % players.length;
+      return dist(u) - dist(v);
+    })[0];
+  };
+
+  switch (a.type) {
+    case 'open':
+    case 'double':
+      winner = a.highestBidder;
+      price = a.highestBid;
+      break;
+
+    case 'fixed':
+      if (bids.length) { winner = a.highestBidder; price = a.fixedPrice; }
+      break;
+
+    case 'sealed':
+    case 'once':
+      if (!bids.length) break;
+      if (!winner) {
+        bids.sort(([,v1],[,v2]) => v2 - v1);
+        const max = bids[0][1];
+        const ties = bids.filter(([,v]) => v === max).map(([id]) => id);
+        winner = ties.length > 1
+          ? (a.type === 'sealed' ? null : resolveTurnOrder(ties))
+          : ties[0];
+        price = max;
+      }
+      break;
+  }
+  return { winner, price };
+};
+
+/* ─────────── hook timer 10 s ─────────── */
+const useTimer = (active: boolean, dur = 10, cb: () => void) => {
+  const [t, setT] = useState(dur);
+  const ref = useRef<NodeJS.Timeout>();
+  const reset = () => setT(dur);
+
+  useEffect(() => {
+    if (!active) { ref.current && clearInterval(ref.current); return; }
+    reset();
+    ref.current && clearInterval(ref.current);
+    ref.current = setInterval(() => setT(x => {
+      if (x <= 1) cb();
+      return x <= 1 ? 0 : x - 1;
+    }), 1000);
+    return () => ref.current && clearInterval(ref.current);
+  }, [active, dur]);
+
+  return { t, reset };
+};
+
+/* ─────────── componente ─────────── */
+export default function AuctionScreen({ gameId, userId }: Props) {
   const [game, setGame] = useState<GameData | null>(null);
+  const [auction, setAuction] = useState<Auction | null>(null);
   const [loading, setLoading] = useState(true);
-  const [timeLeft, setTimeLeft] = useState(20);
-  const [tieModalVisible, setTieModalVisible] = useState(false);
-  const [tieBidders, setTieBidders] = useState<string[]>([]);
   const [bidSent, setBidSent] = useState(false);
   const [priceInput, setPriceInput] = useState('');
 
-  // --- Firestore listener ---
-  useEffect(() => {
-    const ref = firestore().doc(`games/${gameId}`);
-    const unsubscribe = ref.onSnapshot((doc: FirebaseFirestoreTypes.DocumentSnapshot) => {
-      const data = doc.data() as GameData | undefined;
-      setGame(data ?? null);
-      setAuction(data?.currentAuction ?? null);
+  /* listener */
+  useEffect(() =>
+    firestore().doc(`games/${gameId}`).onSnapshot(snap => {
+      if (!snap.exists) return;
+      const g = snap.data() as GameData;
+      setGame(g);
+      setAuction(g.currentAuction ?? null);
       setLoading(false);
-      if (data?.currentAuction) {
-        const t = data.currentAuction.type;
-        setTimeLeft(t === 'once' ? 15 : t === 'double' ? 25 : t === 'sealed' ? 30 : 20);
+    }), [gameId]);
+
+  /* finishAuction antes de usarlo en hooks */
+  async function finishAuction(forcedWinner?: string) {
+    await firestore().runTransaction(async tx => {
+      const snap = await tx.get(firestore().doc(`games/${gameId}`));
+      const g = snap.data() as GameData;
+      const a = g.currentAuction!;
+      const { winner, price } = determineWinner(a, g.players, forcedWinner);
+
+      const turn = advanceTurn(g, a.sellerId);
+
+      if (!winner) {                                     // sin venta
+        tx.update(snap.ref, {
+          currentTurn: turn.uid,
+          currentTurnIndex: turn.index,
+          currentAuction: firestore.FieldValue.delete(),
+        });
+        return;
       }
-    });
-    return unsubscribe;
-  }, [gameId]);
 
-  // Reset feedback cuando cambia la subasta
-  useEffect(() => {
-    setBidSent(false);
-  }, [auction]);
+      const newPlayers = g.players.map(p =>
+        p.uid === winner     ? { ...p, money: p.money - price } :
+        p.uid === a.sellerId ? { ...p, money: p.money + price } : p
+      );
+      const newCounts = {
+        ...g.artistCounts,
+        [a.artist]: (g.artistCounts[a.artist] || 0) + a.cardCount,
+      };
 
-  if (loading) return <View style={styles.centered}><ActivityIndicator size="large" /></View>;
-  if (!game || !auction) return <View style={styles.centered}><Text>No hay subasta.</Text></View>;
-
-  const { players, artistCounts } = game;
-  const isSeller = auction.sellerId === userId;
-  const userMoney = players.find(p => p.uid === userId)?.money || 0;
-
-  const playerName = (uid: string | null) => {
-    if (!uid) return 'Nadie';
-    const p = players.find(p => p.uid === uid);
-    return p?.name ?? 'Desconocido';
-  };
-
-  // ---------- BID HANDLER ----------
-  const handleBid = async (amount: number) => {
-    if (!auction) return;
-
-    if ((auction.type === 'open' || auction.type === 'double') && amount <= auction.highestBid) {
-      return Alert.alert('Oferta insuficiente', 'Debe superar la oferta actual.');
-    }
-    if ((auction.type === 'once' || auction.type === 'sealed') && auction.bids[userId] !== undefined) {
-      return Alert.alert('Ya enviaste tu puja');
-    }
-    if (amount > userMoney) {
-      return Alert.alert('Fondos insuficientes');
-    }
-
-    const newBids = { ...auction.bids, [userId]: amount };
-    const upd: Partial<Auction> = { bids: newBids };
-    if (auction.type === 'open' || auction.type === 'double') {
-      upd.highestBid = amount;
-      upd.highestBidder = userId;
-    }
-    await firestore().doc(`games/${gameId}`).update({ currentAuction: { ...auction, ...upd } });
-    setBidSent(true);
-  };
-
-  // ---------- SET PRICE FOR FIXED ----------
-  const setFixedPrice = async () => {
-    const price = parseInt(priceInput, 10);
-    if (isNaN(price) || price <= 0) return Alert.alert('Precio inválido');
-    await firestore().doc(`games/${gameId}`).update({ currentAuction: { ...auction, fixedPrice: price } });
-    setPriceInput('');
-  };
-
-  // ---------- FINISH / CANCEL / TIE ----------
-  const cancelAuction = async () => {
-    await firestore().doc(`games/${gameId}`).update({ currentAuction: firestore.FieldValue.delete() });
-  };
-
-  const handleResolveTie = (winnerId: string) => {
-    setTieModalVisible(false);
-    handleFinish(winnerId);
-  };
-
-  const handleFinish = async (forcedWinnerId?: string) => {
-    if (!auction || !game) return;
-
-    let winner: string | null = forcedWinnerId ?? null;
-    let bidValue = 0;
-    const bidsArr = Object.entries(auction.bids);
-
-    switch (auction.type) {
-      case 'open':
-      case 'double':
-        winner = auction.highestBidder;
-        bidValue = auction.highestBid;
-        break;
-      case 'fixed':
-        if (bidsArr.length > 0) {
-          winner = auction.highestBidder;
-          bidValue = auction.fixedPrice;
-        } else {
-          winner = auction.sellerId;
-          bidValue = Math.floor(auction.fixedPrice / 2);
-        }
-        break;
-      case 'sealed':
-      case 'once':
-        if (bidsArr.length === 0) {
-          await cancelAuction();
-          return;
-        }
-        if (!winner) {
-          bidsArr.sort((a, b) => b[1] - a[1]);
-          const highest = bidsArr[0][1];
-          const ties = bidsArr.filter(([, v]) => v === highest).map(([id]) => id);
-          if (ties.length > 1 && auction.type === 'sealed') {
-            setTieBidders(ties);
-            setTieModalVisible(true);
-            return;
-          }
-          winner = ties.length > 1 ? ties[Math.floor(Math.random() * ties.length)] : ties[0];
-          bidValue = highest;
-        }
-        break;
-    }
-
-    if (!winner) {
-      await cancelAuction();
-      return;
-    }
-
-    const updatedPlayers = players.map(p => {
-      if (p.uid === winner) return { ...p, money: p.money - bidValue };
-      if (p.uid === auction.sellerId) return { ...p, money: p.money + bidValue };
-      return p;
+      tx.update(snap.ref, {
+        players: newPlayers,
+        artistCounts: newCounts,
+        currentTurn: turn.uid,
+        currentTurnIndex: turn.index,
+        currentAuction: firestore.FieldValue.delete(),
+      });
     });
 
-    const sellerIndex = players.findIndex(p => p.uid === auction.sellerId);
-    const nextIndex   = (sellerIndex + 1) % players.length;
-    const newCounts   = { ...(artistCounts || {}), [auction.artist]: (artistCounts?.[auction.artist] || 0) + auction.cardCount };
-
-    await firestore().doc(`games/${gameId}`).update({
-      players: updatedPlayers,
-      currentAuction: firestore.FieldValue.delete(),
-      currentTurn: players[nextIndex].uid,
-      currentTurnIndex: nextIndex,
-      artistCounts: newCounts,
-    });
     await checkAndAdvanceRound(gameId);
+  }
+
+  /* timer 10 s */
+  const { t: timer, reset: resetTimer } = useTimer(
+    !!auction, 10,
+    () => auction && auction.sellerId === userId && finishAuction()
+  );
+
+  if (loading)
+    return <View style={styles.c}><ActivityIndicator size="large" /></View>;
+
+  if (!game || !auction)
+    return <View style={styles.c}><Text>No hay subasta activa</Text></View>;
+
+  /* shorthands */
+  const players = game.players;
+  const me = players.find(p => p.uid === userId)!;
+  const isSeller = me.uid === auction.sellerId;
+  const alreadyBid = auction.bids[userId] !== undefined;
+  const canSetPrice = isSeller && auction.type === 'fixed' &&
+    !Object.keys(auction.bids).length;              // SIN fixedPrice === 0
+
+  /* acciones */
+  const placeBid = async (amount: number) => {
+    const err = validateBid(auction, userId, amount, me.money);
+    if (err) { Alert.alert('Puja rechazada', err); return; }
+
+    await firestore().runTransaction(async tx => {
+      const snap = await tx.get(firestore().doc(`games/${gameId}`));
+      const g = snap.data() as GameData;
+      const a = g.currentAuction!;
+
+      a.bids[userId] = amount;
+      if (a.type === 'open' || a.type === 'double') {
+        a.highestBid = amount;
+        a.highestBidder = userId;
+      }
+      tx.update(snap.ref, { currentAuction: a });
+    });
+
+    setBidSent(true);
+    resetTimer();
   };
 
-  // ---------- RENDER ----------
-  const canSetPrice = isSeller && auction.type === 'fixed' && Object.keys(auction.bids).length === 0;
+  const setFixedPrice = async () => {
+    const p = parseInt(priceInput, 10);
+    if (isNaN(p) || p <= 0) { Alert.alert('Precio inválido'); return; }
+    await firestore().doc(`games/${gameId}`)
+      .update({ 'currentAuction.fixedPrice': p });
+    setPriceInput('');
+    resetTimer();
+  };
 
+  const cancelAuction = async () => {
+    if (!isSeller) return;
+    await firestore().runTransaction(async tx => {
+      const snap = await tx.get(firestore().doc(`games/${gameId}`));
+      const g = snap.data() as GameData;
+      const turn = advanceTurn(g, userId);
+      tx.update(snap.ref, {
+        currentTurn: turn.uid,
+        currentTurnIndex: turn.index,
+        currentAuction: firestore.FieldValue.delete(),
+      });
+    });
+  };
+
+  /* render helpers */
+  const moneyLabel = (
+    <Text style={styles.money}>Tu saldo: €{me.money}</Text>
+  );
+
+  /* JSX */
   return (
     <View style={styles.container}>
       <AuctionHeader artwork={auction.artwork} artist={auction.artist} typeName={auction.type} />
 
-      <AuctionTimer duration={timeLeft} timeLeft={timeLeft} onTimeout={() => (isSeller ? handleFinish() : undefined)} />
+      <AuctionTimer duration={10} timeLeft={timer} />
+
+      {/* orden de turnos */}
+      <View style={styles.orderRow}>
+        {players.map((p, i) => (
+          <Text key={p.uid} style={p.uid === auction.sellerId && styles.seller}>
+            {i + 1}. {p.name}
+          </Text>
+        ))}
+      </View>
 
       <AuctionStateInfo
-        type={auction.type}
+        auctionType={auction.type}
         highestBid={auction.highestBid}
         highestBidder={auction.highestBidder ?? undefined}
         bidsReceived={Object.keys(auction.bids).length}
         totalPlayers={players.length}
+        fixedPrice={auction.type === 'fixed' ? auction.fixedPrice : undefined}
       />
 
       <BidList
         bids={auction.bids}
-        visible={['open', 'once', 'double'].includes(auction.type)}
-        getPlayerName={playerName}
+        visible={['open', 'double'].includes(auction.type)}
+        getPlayerName={uid => players.find(p => p.uid === uid)?.name ?? 'Nadie'}
       />
 
+      {/* vendedor fija precio */}
       {canSetPrice && (
-        <View style={styles.priceContainer}>
-          <Text>Precio fijo: </Text>
+        <View style={styles.priceRow}>
           <TextInput
-            style={styles.priceInput}
+            style={styles.input}
+            placeholder={`${auction.fixedPrice || ''}`}
+            keyboardType="number-pad"
             value={priceInput}
             onChangeText={setPriceInput}
-            keyboardType="numeric"
           />
-          <Button title="Fijar precio" onPress={setFixedPrice} />
+          <Button title="Fijar" onPress={setFixedPrice} />
         </View>
       )}
 
+      {/* comprador */}
       {!isSeller && !canSetPrice && (
-        bidSent && (auction.type === 'sealed' || auction.type === 'once') ? (
-          <Text style={styles.sentMsg}>✅ Puja enviada</Text>
+        auction.type === 'fixed' ? (
+          <>
+            {moneyLabel}
+            <Button
+              title={`Comprar (€${auction.fixedPrice})`}
+              onPress={() => placeBid(auction.fixedPrice)}
+              disabled={alreadyBid || auction.fixedPrice > me.money}
+            />
+          </>
         ) : (
-          <BidInput
-            type={auction.type}
-            fixedPrice={auction.fixedPrice}
-            onSubmit={handleBid}
-            disabled={(auction.type === 'sealed' || auction.type === 'once') && auction.bids[userId] !== undefined}
-          />
+          <>
+            {moneyLabel}
+            <BidInput
+              type={auction.type}
+              fixedPrice={auction.fixedPrice}
+              currentMoney={me.money}
+              disabled={alreadyBid}
+              onSubmit={placeBid}
+            />
+          </>
         )
       )}
 
+      {/* acciones vendedor */}
       {isSeller && !canSetPrice && (
         <SellerActions
           type={auction.type}
-          onFinish={() => handleFinish()}
+          onFinish={() => finishAuction()}
           onCancel={cancelAuction}
-          onReveal={() => handleFinish()}
+          onReveal={() => finishAuction()}
         />
       )}
 
       <TieBreakModal
-        visible={tieModalVisible}
-        tiedBidders={tieBidders}
+        visible={false}           /* TODO: implementar modal de empate */
+        tiedBidders={[]}
         bids={auction.bids}
-        getPlayerName={playerName}
-        onResolve={handleResolveTie}
+        getPlayerName={uid => players.find(p => p.uid === uid)?.name ?? 'Nadie'}
+        onResolve={id => finishAuction(id)}
       />
     </View>
   );
 }
 
+/* ─────────── estilos ─────────── */
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: '#f5f5f5' },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  priceContainer: { flexDirection: 'row', alignItems: 'center', marginVertical: 8 },
-  priceInput: { borderWidth: 1, borderColor: '#999', padding: 4, width: 80, marginHorizontal: 8, borderRadius: 4 },
-  sentMsg: { textAlign: 'center', marginTop: 10, color: '#4CAF50', fontWeight: '600' },
+  container:{ flex:1, padding:16, backgroundColor:'#f5f5f5' },
+  c:{ flex:1, justifyContent:'center', alignItems:'center' },
+  orderRow:{ flexDirection:'row', flexWrap:'wrap', gap:6, marginVertical:6 },
+  seller:{ fontWeight:'700', textDecorationLine:'underline' },
+  money:{ textAlign:'center', marginBottom:4, fontWeight:'600' },
+  priceRow:{ flexDirection:'row', alignItems:'center', gap:8, marginVertical:6 },
+  input:{ borderWidth:1, borderColor:'#999', borderRadius:4, padding:4, width:80 },
+  sentMsg:{ textAlign:'center', marginVertical:6, color:'#4CAF50', fontWeight:'600' },
 });
