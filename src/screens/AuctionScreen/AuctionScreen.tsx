@@ -1,9 +1,3 @@
-/**
- * ==========================================================================
- * AuctionScreen.tsx   –   ahora permite pujas múltiples en “abierta/doble”
- * ==========================================================================
- */
-
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -26,23 +20,18 @@ import TieBreakModal from './TieBreakModal';
 
 import {
   placeBidTransactional,
-  acceptFixedPriceTransactional,
   finishAuctionTransactional,
   cancelAuctionTransactional,
 } from '../../services/auctionService';
 
-import type { Game, Auction, Bid, AuctionType } from '../../types/game';
+import type { Game, Auction, Bid } from '../../types/game';
 
-/* ─────────────── mapeo ES → EN para componentes viejos ─────────────── */
-const EN: Record<AuctionType, string> = {
-  'abierta': 'open',
-  'cerrada': 'sealed',
-  'una-vuelta': 'once',
-  'fija': 'fixed',
-  'doble': 'double',
+const EN: Record<string, string> = {
+  abierta: 'open',
+  doble: 'double',
+  // Otros tipos en inglés si los habilitas luego
 };
 
-/* ─────────────── Timer sencillo ─────────────── */
 const useCountdown = (active: boolean, secs: number, cb: () => void) => {
   const [t, setT] = useState(secs);
   useEffect(() => {
@@ -63,12 +52,7 @@ const useCountdown = (active: boolean, secs: number, cb: () => void) => {
   return { t, reset: () => setT(secs) };
 };
 
-/* ─────────────── Componente ─────────────── */
-export default function AuctionScreen({
-  route,
-}: {
-  route: { params: { gameId: string; userId: string } };
-}) {
+export default function AuctionScreen({ route }: { route: { params: { gameId: string; userId: string } } }) {
   const { gameId, userId } = route.params;
 
   const [game, setGame] = useState<Game | null>(null);
@@ -76,12 +60,11 @@ export default function AuctionScreen({
   const [loading, setLoading] = useState(true);
   const [priceInput, setPriceInput] = useState('');
 
-  /* ------- listener ------- */
   useEffect(() => {
     const unsub = firestore()
       .doc(`games/${gameId}`)
-      .onSnapshot((s) => {
-        const g = s.exists ? (s.data() as Game) : null;
+      .onSnapshot((snap) => {
+        const g = snap.exists ? (snap.data() as Game) : null;
         setGame(g);
         setAuction(g?.auction ?? null);
         setLoading(false);
@@ -89,101 +72,51 @@ export default function AuctionScreen({
     return unsub;
   }, [gameId]);
 
-  /* ------- timer ------- */
   const { t: seconds, reset } = useCountdown(
     !!auction,
     20,
-    () =>
-      auction &&
-      auction.hostPlayerId === userId &&
-      finishAuction(),
+    () => auction && auction.hostPlayerId === userId && finishAuction(),
   );
 
-  /* ------- helpers ------- */
   const bidsRec: Record<string, number> = (auction?.bids ?? []).reduce(
-    (map, b) => ({ ...map, [b.playerId]: b.amount }),
+    (m, b) => ({ ...m, [b.playerId]: b.amount }),
     {},
   );
-  const highestBid = auction?.highestBid ?? null;
-  const me = game?.players.find((p) => p.uid === userId);
-  const alreadyBid =
-    auction?.bids.some((b) => b.playerId === userId) ?? false;
+  const highestBid = auction?.highestBid;
+  const meMoney = game?.players.find((p) => p.uid === userId)?.money ?? 0;
+  const alreadyBid = auction?.bids.some((b) => b.playerId === userId) ?? false;
 
-  /* ------- validación ------- */
   const validate = (amt: number): string | null => {
-    if (!auction || !me) return 'No hay subasta';
+    if (!auction) return 'No hay subasta';
     if (amt <= 0) return 'Oferta inválida';
-    if (amt > me.money) return 'Saldo insuficiente';
-
-    switch (auction.type) {
-      case 'abierta':
-      case 'doble':
-        if (amt <= (highestBid?.amount ?? 0))
-          return 'Debe superar la puja actual';
-        if (highestBid?.playerId === userId) return 'Ya sos el mejor postor';
-        return null;
-
-      case 'una-vuelta':
-        if (alreadyBid) return 'Ya ofertaste en esta subasta';
-        return null;
-
-      case 'cerrada':
-        return null; /* puede sobrescribir */
-
-      case 'fija':
-        if (amt !== (auction.fixedPrice ?? 0))
-          return 'Debes pagar exactamente el precio fijo';
-        return null;
-
-      default:
-        return 'Tipo de subasta no soportado';
-    }
+    if (amt > meMoney) return 'Saldo insuficiente';
+    const current = highestBid?.amount ?? 0;
+    if (amt <= current) return 'Debe superar la puja actual';
+    if (highestBid?.playerId === userId) return 'Ya sos el mejor postor';
+    return null;
   };
 
-  /* ------- acciones ------- */
   const bid = async (amt: number) => {
     const err = validate(amt);
     if (err) return Alert.alert('Rechazada', err);
     try {
       await placeBidTransactional(gameId, userId, amt);
-      reset(); // reinicia siempre
-    } catch (e: any) {
-      Alert.alert('Error', e.message);
-    }
-  };
-
-  const buyFixed = async () => {
-    try {
-      await acceptFixedPriceTransactional(gameId, userId);
       reset();
     } catch (e: any) {
       Alert.alert('Error', e.message);
     }
   };
 
-  const setFixed = async () => {
-    const p = parseInt(priceInput, 10);
-    if (isNaN(p) || p <= 0) return Alert.alert('Número inválido');
+  const finishAuction = useCallback(async () => {
     try {
-      await firestore()
-        .doc(`games/${gameId}`)
-        .update({ 'auction.fixedPrice': p });
-      setPriceInput('');
-      reset();
+      await finishAuctionTransactional(gameId);
     } catch (e: any) {
       Alert.alert('Error', e.message);
     }
-  };
+  }, [gameId]);
 
-  const finishAuction = useCallback(
-    async () => finishAuctionTransactional(gameId),
-    [gameId],
-  );
+  const cancel = async () => cancelAuctionTransactional(gameId, userId);
 
-  const cancelAuction = async () =>
-    cancelAuctionTransactional(gameId, userId);
-
-  /* ------- early UI ------- */
   if (loading)
     return (
       <View style={styles.center}>
@@ -198,23 +131,14 @@ export default function AuctionScreen({
     );
 
   const isSeller = auction.hostPlayerId === userId;
-  const canSetPrice =
-    isSeller &&
-    auction.type === 'fija' &&
-    !auction.fixedPrice &&
-    auction.bids.length === 0;
-
-  /* ------- render ------- */
   return (
     <View style={styles.container}>
       <AuctionHeader
         artwork={auction.card.id}
         artist={auction.card.artist}
-        typeName={EN[auction.type]}
+        typeName={EN[auction.type] || 'open'}
       />
-
       <AuctionTimer duration={20} timeLeft={seconds} />
-
       <AuctionStateInfo
         auctionType={EN[auction.type] as any}
         highestBid={highestBid?.amount ?? 0}
@@ -223,83 +147,34 @@ export default function AuctionScreen({
         }
         bidsReceived={auction.bids.length}
         totalPlayers={game.players.length}
-        fixedPrice={auction.fixedPrice}
       />
-
       <BidList
         bids={bidsRec}
-        visible={['abierta', 'doble'].includes(auction.type)}
+        visible={true}
         getPlayerName={(uid) => game.players.find((p) => p.uid === uid)?.name!}
       />
-
-      {/* vendedor fija precio */}
-      {canSetPrice && (
-        <View style={styles.row}>
-          <TextInput
-            style={styles.input}
-            placeholder="€"
-            keyboardType="number-pad"
-            value={priceInput}
-            onChangeText={setPriceInput}
-          />
-          <Button title="Fijar" onPress={setFixed} />
-        </View>
-      )}
-
-      {/* comprador */}
-      {!isSeller &&
-        (auction.type === 'fija' ? (
-          <Button
-            title={`Comprar (€${auction.fixedPrice})`}
-            onPress={buyFixed}
-            disabled={
-              alreadyBid || (auction.fixedPrice ?? 0) > (me?.money ?? 0)
-            }
-          />
-        ) : (
-<BidInput
-  type={EN[auction.type] as any}
-  fixedPrice={auction.fixedPrice ?? 0}
-  currentMoney={me?.money ?? 0}  
-  disabled={
-    alreadyBid && auction.type === 'una-vuelta'
-  }
-  onSubmit={bid}
-/>
-        ))}
-
-      {/* acciones vendedor */}
-      {isSeller && !canSetPrice && (
+      {!isSeller ? (
+        <BidInput
+          type="open"
+          fixedPrice={0}
+          currentMoney={meMoney}
+          disabled={false}
+          onSubmit={bid}
+        />
+      ) : (
         <SellerActions
-          type={EN[auction.type] as any}
+          type="open"
           onFinish={finishAuction}
-          onCancel={cancelAuction}
+          onCancel={cancel}
           onReveal={finishAuction}
         />
       )}
-
-      {/* empate (futuro) */}
-      <TieBreakModal
-        visible={false}
-        tiedBidders={[]}
-        bids={bidsRec}
-        getPlayerName={(uid) => game.players.find((p) => p.uid === uid)?.name!}
-        onResolve={() => finishAuction()}
-      />
+      <TieBreakModal visible={false} tiedBidders={[]} bids={bidsRec} getPlayerName={(uid) => game.players.find((p) => p.uid === uid)?.name!} onResolve={() => finishAuction()} />
     </View>
   );
 }
 
-/* ───────── estilos ───────── */
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 16 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  row: { flexDirection: 'row', gap: 8, marginVertical: 8, alignItems: 'center' },
-  input: {
-    borderWidth: 1,
-    borderColor: '#888',
-    borderRadius: 4,
-    paddingHorizontal: 8,
-    width: 90,
-  },
 });
