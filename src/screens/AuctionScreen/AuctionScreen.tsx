@@ -1,6 +1,8 @@
-// ──────────────────────────────────────────────────────────────────────────
-// AuctionScreen.tsx  –  alineado a tipos reales + fixedPrice definido
-// ──────────────────────────────────────────────────────────────────────────
+/**
+ * ==========================================================================
+ * AuctionScreen.tsx   –   ahora permite pujas múltiples en “abierta/doble”
+ * ==========================================================================
+ */
 
 import React, { useCallback, useEffect, useState } from 'react';
 import {
@@ -29,51 +31,39 @@ import {
   cancelAuctionTransactional,
 } from '../../services/auctionService';
 
-import type {
-  Game,
-  Auction,
-  Bid,
-  AuctionType,
-} from '../../types/game';
+import type { Game, Auction, Bid, AuctionType } from '../../types/game';
 
-/* ─────────────── Mapeos utilitarios ──────────────── */
-const toEN: Record<AuctionType, string> = {
+/* ─────────────── mapeo ES → EN para componentes viejos ─────────────── */
+const EN: Record<AuctionType, string> = {
   'abierta': 'open',
   'cerrada': 'sealed',
   'una-vuelta': 'once',
   'fija': 'fixed',
   'doble': 'double',
 };
-const toES = (t: string): AuctionType =>
-  (Object.entries(toEN).find(([, en]) => en === t)?.[0] ??
-    t) as AuctionType;
 
-/* ─────────────── Hook de cuenta regresiva ─────────────── */
-const useCountdown = (
-  active: boolean,
-  seconds: number,
-  onZero: () => void,
-) => {
-  const [time, setTime] = useState(seconds);
+/* ─────────────── Timer sencillo ─────────────── */
+const useCountdown = (active: boolean, secs: number, cb: () => void) => {
+  const [t, setT] = useState(secs);
   useEffect(() => {
     if (!active) return;
-    setTime(seconds);
+    setT(secs);
     const id = setInterval(() => {
-      setTime((t) => {
-        if (t <= 1) {
+      setT((x) => {
+        if (x <= 1) {
           clearInterval(id);
-          onZero();
+          cb();
           return 0;
         }
-        return t - 1;
+        return x - 1;
       });
-    }, 1_000);
+    }, 1000);
     return () => clearInterval(id);
-  }, [active, seconds, onZero]);
-  return { time, reset: () => setTime(seconds) };
+  }, [active, secs, cb]);
+  return { t, reset: () => setT(secs) };
 };
 
-/* ─────────────────── Componente ─────────────────── */
+/* ─────────────── Componente ─────────────── */
 export default function AuctionScreen({
   route,
 }: {
@@ -86,12 +76,12 @@ export default function AuctionScreen({
   const [loading, setLoading] = useState(true);
   const [priceInput, setPriceInput] = useState('');
 
-  /* =================== Firestore listener =================== */
+  /* ------- listener ------- */
   useEffect(() => {
     const unsub = firestore()
       .doc(`games/${gameId}`)
-      .onSnapshot((snap) => {
-        const g = snap.exists ? (snap.data() as Game) : null;
+      .onSnapshot((s) => {
+        const g = s.exists ? (s.data() as Game) : null;
         setGame(g);
         setAuction(g?.auction ?? null);
         setLoading(false);
@@ -99,8 +89,8 @@ export default function AuctionScreen({
     return unsub;
   }, [gameId]);
 
-  /* =================== Timer =================== */
-  const { time, reset } = useCountdown(
+  /* ------- timer ------- */
+  const { t: seconds, reset } = useCountdown(
     !!auction,
     20,
     () =>
@@ -109,48 +99,54 @@ export default function AuctionScreen({
       finishAuction(),
   );
 
-  /* =================== Helpers =================== */
-  const bidsRecord: Record<string, number> = (auction?.bids ?? []).reduce(
-    (map, b) => {
-      map[b.playerId] = b.amount;
-      return map;
-    },
-    {} as Record<string, number>,
+  /* ------- helpers ------- */
+  const bidsRec: Record<string, number> = (auction?.bids ?? []).reduce(
+    (map, b) => ({ ...map, [b.playerId]: b.amount }),
+    {},
   );
-
-  const highestBidAmount = auction?.highestBid?.amount ?? 0;
-  const highestBidderId = auction?.highestBid?.playerId ?? '';
-  const alreadyBid = auction?.bids.some((b) => b.playerId === userId) ?? false;
+  const highestBid = auction?.highestBid ?? null;
   const me = game?.players.find((p) => p.uid === userId);
+  const alreadyBid =
+    auction?.bids.some((b) => b.playerId === userId) ?? false;
 
-  /* =================== Validaciones =================== */
-  const validateBid = (amount: number): string | null => {
+  /* ------- validación ------- */
+  const validate = (amt: number): string | null => {
     if (!auction || !me) return 'No hay subasta';
-    if (amount <= 0) return 'Oferta inválida';
-    if (amount > me.money) return 'Saldo insuficiente';
+    if (amt <= 0) return 'Oferta inválida';
+    if (amt > me.money) return 'Saldo insuficiente';
 
-    const type = auction.type;
-    if (type === 'abierta' || type === 'doble') {
-      if (amount <= highestBidAmount) return 'Debe superar la oferta actual';
-      if (highestBidderId === userId) return 'Ya sos el mejor postor';
+    switch (auction.type) {
+      case 'abierta':
+      case 'doble':
+        if (amt <= (highestBid?.amount ?? 0))
+          return 'Debe superar la puja actual';
+        if (highestBid?.playerId === userId) return 'Ya sos el mejor postor';
+        return null;
+
+      case 'una-vuelta':
+        if (alreadyBid) return 'Ya ofertaste en esta subasta';
+        return null;
+
+      case 'cerrada':
+        return null; /* puede sobrescribir */
+
+      case 'fija':
+        if (amt !== (auction.fixedPrice ?? 0))
+          return 'Debes pagar exactamente el precio fijo';
+        return null;
+
+      default:
+        return 'Tipo de subasta no soportado';
     }
-    if (
-      (type === 'una-vuelta' || type === 'cerrada') &&
-      alreadyBid
-    )
-      return 'Solo una oferta en esta subasta';
-    if (type === 'fija' && amount !== (auction.fixedPrice ?? 0))
-      return 'Debes pagar exactamente el precio fijo';
-    return null;
   };
 
-  /* =================== Acciones =================== */
-  const placeBid = async (amount: number) => {
-    const err = validateBid(amount);
+  /* ------- acciones ------- */
+  const bid = async (amt: number) => {
+    const err = validate(amt);
     if (err) return Alert.alert('Rechazada', err);
     try {
-      await placeBidTransactional(gameId, userId, amount);
-      reset();
+      await placeBidTransactional(gameId, userId, amt);
+      reset(); // reinicia siempre
     } catch (e: any) {
       Alert.alert('Error', e.message);
     }
@@ -165,25 +161,9 @@ export default function AuctionScreen({
     }
   };
 
-  const finishAuction = useCallback(async () => {
-    try {
-      await finishAuctionTransactional(gameId);
-    } catch (e: any) {
-      Alert.alert('Error', e.message);
-    }
-  }, [gameId]);
-
-  const cancelAuction = async () => {
-    try {
-      await cancelAuctionTransactional(gameId, userId);
-    } catch (e: any) {
-      Alert.alert('Error', e.message);
-    }
-  };
-
-  const setFixedPrice = async () => {
+  const setFixed = async () => {
     const p = parseInt(priceInput, 10);
-    if (isNaN(p) || p <= 0) return Alert.alert('Precio inválido');
+    if (isNaN(p) || p <= 0) return Alert.alert('Número inválido');
     try {
       await firestore()
         .doc(`games/${gameId}`)
@@ -195,7 +175,15 @@ export default function AuctionScreen({
     }
   };
 
-  /* =================== Early UI =================== */
+  const finishAuction = useCallback(
+    async () => finishAuctionTransactional(gameId),
+    [gameId],
+  );
+
+  const cancelAuction = async () =>
+    cancelAuctionTransactional(gameId, userId);
+
+  /* ------- early UI ------- */
   if (loading)
     return (
       <View style={styles.center}>
@@ -209,8 +197,6 @@ export default function AuctionScreen({
       </View>
     );
 
-  /* =================== Derivados de render =================== */
-  const players = game.players;
   const isSeller = auction.hostPlayerId === userId;
   const canSetPrice =
     isSeller &&
@@ -218,35 +204,35 @@ export default function AuctionScreen({
     !auction.fixedPrice &&
     auction.bids.length === 0;
 
-  /* =================== UI =================== */
+  /* ------- render ------- */
   return (
     <View style={styles.container}>
       <AuctionHeader
         artwork={auction.card.id}
         artist={auction.card.artist}
-        typeName={toEN[auction.type]}
+        typeName={EN[auction.type]}
       />
 
-      <AuctionTimer duration={20} timeLeft={time} />
+      <AuctionTimer duration={20} timeLeft={seconds} />
 
       <AuctionStateInfo
-        auctionType={toEN[auction.type] as any}
-        highestBid={highestBidAmount}
+        auctionType={EN[auction.type] as any}
+        highestBid={highestBid?.amount ?? 0}
         highestBidder={
-          players.find((p) => p.uid === highestBidderId)?.name
+          game.players.find((p) => p.uid === highestBid?.playerId)?.name
         }
         bidsReceived={auction.bids.length}
-        totalPlayers={players.length}
+        totalPlayers={game.players.length}
         fixedPrice={auction.fixedPrice}
       />
 
       <BidList
-        bids={bidsRecord}
+        bids={bidsRec}
         visible={['abierta', 'doble'].includes(auction.type)}
-        getPlayerName={(uid) => players.find((p) => p.uid === uid)?.name ?? ''}
+        getPlayerName={(uid) => game.players.find((p) => p.uid === uid)?.name!}
       />
 
-      {/* Vendedor fija precio */}
+      {/* vendedor fija precio */}
       {canSetPrice && (
         <View style={styles.row}>
           <TextInput
@@ -256,11 +242,11 @@ export default function AuctionScreen({
             value={priceInput}
             onChangeText={setPriceInput}
           />
-          <Button title="Fijar" onPress={setFixedPrice} />
+          <Button title="Fijar" onPress={setFixed} />
         </View>
       )}
 
-      {/* Comprador: pujar o comprar precio fijo */}
+      {/* comprador */}
       {!isSeller &&
         (auction.type === 'fija' ? (
           <Button
@@ -271,42 +257,44 @@ export default function AuctionScreen({
             }
           />
         ) : (
-          <BidInput
-            type={toEN[auction.type] as any}
-            fixedPrice={auction.fixedPrice ?? 0} 
-            currentMoney={me?.money ?? 0}
-            disabled={alreadyBid}
-            onSubmit={placeBid}
-          />
+<BidInput
+  type={EN[auction.type] as any}
+  fixedPrice={auction.fixedPrice ?? 0}
+  currentMoney={me?.money ?? 0}  
+  disabled={
+    alreadyBid && auction.type === 'una-vuelta'
+  }
+  onSubmit={bid}
+/>
         ))}
 
-      {/* Acciones del vendedor */}
+      {/* acciones vendedor */}
       {isSeller && !canSetPrice && (
         <SellerActions
-          type={toEN[auction.type] as any}
+          type={EN[auction.type] as any}
           onFinish={finishAuction}
           onCancel={cancelAuction}
           onReveal={finishAuction}
         />
       )}
 
-      {/* Empate (placeholder) */}
+      {/* empate (futuro) */}
       <TieBreakModal
         visible={false}
         tiedBidders={[]}
-        bids={bidsRecord}
-        getPlayerName={(uid) => players.find((p) => p.uid === uid)?.name ?? ''}
+        bids={bidsRec}
+        getPlayerName={(uid) => game.players.find((p) => p.uid === uid)?.name!}
         onResolve={() => finishAuction()}
       />
     </View>
   );
 }
 
-/* ─────────────── Estilos ─────────────── */
+/* ───────── estilos ───────── */
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 16 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 6 },
+  row: { flexDirection: 'row', gap: 8, marginVertical: 8, alignItems: 'center' },
   input: {
     borderWidth: 1,
     borderColor: '#888',
