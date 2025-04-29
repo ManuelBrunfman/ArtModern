@@ -1,11 +1,11 @@
+// src/screens/AuctionScreen/AuctionScreen.tsx
+
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Button,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import firestore from '@react-native-firebase/firestore';
@@ -24,41 +24,54 @@ import {
   cancelAuctionTransactional,
 } from '../../services/auctionService';
 
-import type { Game, Auction, Bid } from '../../types/game';
+import type { Game, Auction, Bid, Player } from '../../types/game';
 
-const EN: Record<string, string> = {
+/* ── Mapeo único: solo abierta ↔ open ── */
+const toEN: Record<'abierta', 'open'> = {
   abierta: 'open',
-  doble: 'double',
-  // Otros tipos en inglés si los habilitas luego
 };
 
-const useCountdown = (active: boolean, secs: number, cb: () => void) => {
-  const [t, setT] = useState(secs);
+/* ── Hook de cuenta atrás ── */
+const useCountdown = (
+  active: boolean,
+  seconds: number,
+  onZero: () => void
+) => {
+  const [time, setTime] = useState(seconds);
   useEffect(() => {
     if (!active) return;
-    setT(secs);
+    setTime(seconds);
     const id = setInterval(() => {
-      setT((x) => {
-        if (x <= 1) {
+      setTime((t) => {
+        if (t <= 1) {
           clearInterval(id);
-          cb();
+          onZero();
           return 0;
         }
-        return x - 1;
+        return t - 1;
       });
     }, 1000);
     return () => clearInterval(id);
-  }, [active, secs, cb]);
-  return { t, reset: () => setT(secs) };
+  }, [active, seconds, onZero]);
+  return { time, reset: () => setTime(seconds) };
 };
 
-export default function AuctionScreen({ route }: { route: { params: { gameId: string; userId: string } } }) {
+/* ── Componente │ AuctionScreen ── */
+export default function AuctionScreen({
+  route,
+}: {
+  route: { params: { gameId: string; userId: string } };
+}) {
   const { gameId, userId } = route.params;
-
   const [game, setGame] = useState<Game | null>(null);
   const [auction, setAuction] = useState<Auction | null>(null);
   const [loading, setLoading] = useState(true);
-  const [priceInput, setPriceInput] = useState('');
+
+  const { time, reset } = useCountdown(
+    !!auction,
+    20,
+    () => auction?.hostPlayerId === userId && finishAuction()
+  );
 
   useEffect(() => {
     const unsub = firestore()
@@ -72,35 +85,50 @@ export default function AuctionScreen({ route }: { route: { params: { gameId: st
     return unsub;
   }, [gameId]);
 
-  const { t: seconds, reset } = useCountdown(
-    !!auction,
-    20,
-    () => auction && auction.hostPlayerId === userId && finishAuction(),
-  );
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
+  if (!game || !auction) {
+    return (
+      <View style={styles.center}>
+        <Text>No hay subasta activa</Text>
+      </View>
+    );
+  }
 
-  const bidsRec: Record<string, number> = (auction?.bids ?? []).reduce(
+  const players = game.players;
+  const isSeller = auction.hostPlayerId === userId;
+  const me = players.find((p) => p.uid === userId) as Player;
+  const highestBidAmount = auction.highestBid?.amount ?? 0;
+  const highestBidderId = auction.highestBid?.playerId ?? '';
+  const alreadyBid = auction.bids.some((b) => b.playerId === userId);
+
+  const bidsRecord: Record<string, number> = auction.bids.reduce(
     (m, b) => ({ ...m, [b.playerId]: b.amount }),
-    {},
+    {}
   );
-  const highestBid = auction?.highestBid;
-  const meMoney = game?.players.find((p) => p.uid === userId)?.money ?? 0;
-  const alreadyBid = auction?.bids.some((b) => b.playerId === userId) ?? false;
 
-  const validate = (amt: number): string | null => {
-    if (!auction) return 'No hay subasta';
-    if (amt <= 0) return 'Oferta inválida';
-    if (amt > meMoney) return 'Saldo insuficiente';
-    const current = highestBid?.amount ?? 0;
-    if (amt <= current) return 'Debe superar la puja actual';
-    if (highestBid?.playerId === userId) return 'Ya sos el mejor postor';
+  const getPlayerName = (uid: string) =>
+    players.find((p) => p.uid === uid)?.name ?? '';
+
+  const validateBid = (amount: number): string | null => {
+    if (!me) return 'No hay usuario';
+    if (amount <= 0) return 'Oferta inválida';
+    if (amount > me.money) return 'Saldo insuficiente';
+    if (amount <= highestBidAmount) return 'Debe superar la oferta actual';
+    if (highestBidderId === userId) return 'Ya sos el mejor postor';
     return null;
   };
 
-  const bid = async (amt: number) => {
-    const err = validate(amt);
+  const placeBid = async (amount: number) => {
+    const err = validateBid(amount);
     if (err) return Alert.alert('Rechazada', err);
     try {
-      await placeBidTransactional(gameId, userId, amt);
+      await placeBidTransactional(gameId, userId, amount);
       reset();
     } catch (e: any) {
       Alert.alert('Error', e.message);
@@ -115,61 +143,57 @@ export default function AuctionScreen({ route }: { route: { params: { gameId: st
     }
   }, [gameId]);
 
-  const cancel = async () => cancelAuctionTransactional(gameId, userId);
+  const cancelAuction = async () => {
+    try {
+      await cancelAuctionTransactional(gameId, userId);
+    } catch (e: any) {
+      Alert.alert('Error', e.message);
+    }
+  };
 
-  if (loading)
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" />
-      </View>
-    );
-  if (!game || !auction)
-    return (
-      <View style={styles.center}>
-        <Text>No hay subasta activa</Text>
-      </View>
-    );
-
-  const isSeller = auction.hostPlayerId === userId;
   return (
     <View style={styles.container}>
       <AuctionHeader
         artwork={auction.card.id}
         artist={auction.card.artist}
-        typeName={EN[auction.type] || 'open'}
+        typeName={toEN[auction.type]}
       />
-      <AuctionTimer duration={20} timeLeft={seconds} />
+      <AuctionTimer duration={20} timeLeft={time} />
       <AuctionStateInfo
-        auctionType={EN[auction.type] as any}
-        highestBid={highestBid?.amount ?? 0}
-        highestBidder={
-          game.players.find((p) => p.uid === highestBid?.playerId)?.name
-        }
+        auctionType={toEN[auction.type]}
+        highestBid={highestBidAmount}
+        highestBidder={getPlayerName(highestBidderId)}
         bidsReceived={auction.bids.length}
-        totalPlayers={game.players.length}
+        totalPlayers={players.length}
       />
       <BidList
-        bids={bidsRec}
+        bids={bidsRecord}
         visible={true}
-        getPlayerName={(uid) => game.players.find((p) => p.uid === uid)?.name!}
+        getPlayerName={getPlayerName}
       />
-      {!isSeller ? (
+      {!isSeller && (
         <BidInput
           type="open"
           fixedPrice={0}
-          currentMoney={meMoney}
-          disabled={false}
-          onSubmit={bid}
-        />
-      ) : (
-        <SellerActions
-          type="open"
-          onFinish={finishAuction}
-          onCancel={cancel}
-          onReveal={finishAuction}
+          currentMoney={me.money}
+          disabled={alreadyBid}
+          onSubmit={placeBid}
         />
       )}
-      <TieBreakModal visible={false} tiedBidders={[]} bids={bidsRec} getPlayerName={(uid) => game.players.find((p) => p.uid === uid)?.name!} onResolve={() => finishAuction()} />
+      {isSeller && (
+        <SellerActions
+          type={toEN[auction.type]}
+          onFinish={finishAuction}
+          onCancel={cancelAuction}
+        />
+      )}
+      <TieBreakModal
+        visible={false}
+        tiedBidders={[]}
+        bids={bidsRecord}
+        getPlayerName={getPlayerName}
+        onResolve={() => finishAuction()}
+      />
     </View>
   );
 }

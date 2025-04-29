@@ -1,5 +1,7 @@
+// src/types/game.ts
+
 // Tipos de subasta
-export type AuctionType = "abierta" | "cerrada" | "una-vuelta" | "doble" | "fija";
+export type AuctionType = "abierta";
 
 // Artistas disponibles (pueden cambiar si usás otros)
 export type Artist = "Karl" | "Yoko" | "Krypto" | "Christin" | "Lite Metal";
@@ -9,26 +11,24 @@ export interface Card {
   id: string; // UUID
   artist: Artist;
   auction: AuctionType;
-  value?: number; // Se usa al final de ronda
-  double?: boolean; // Para subasta doble
-  playedBy?: string; // ID jugador que la jugó
+  value?: number;       // Se usa al final de ronda
+  double?: boolean;     // Para subasta doble (queda siempre false en open)
+  playedBy?: string;    // ID jugador que la jugó
 }
 
 // Jugador
 export interface Player {
   id: string;
-  uid: string; // 👈 Agregá esta línea
-
+  uid: string;
   name: string;
   money: number;
   hand: Card[];
   soldCards: Card[];
-  collection: Card[]; // Asegurar esta línea existe
-
+  collection: Card[];
   isHost?: boolean;
 }
 
-// Pujas (para subastas cerradas, una vuelta, etc.)
+// Pujas
 export interface Bid {
   playerId: string;
   amount: number;
@@ -43,10 +43,7 @@ export interface Auction {
   bids: Bid[];
   highestBid?: Bid;
   resolved: boolean;
-  turnOrder?: string[]; // Para subasta a una vuelta
-  currentTurnIndex?: number;
-  fixedPrice?: number; // 👈 Añadir esta línea
-
+  // Las propiedades de los otros modos ya no se usan
 }
 
 // Partida en Firestore
@@ -55,7 +52,7 @@ export interface Game {
   status: "waiting" | "in-progress" | "finished";
   players: Player[];
   round: number;
-  artistCounts: Record<Artist, number>; // { "Karl": 3, "Yoko": 1, ... }
+  artistCounts: Record<Artist, number>;
   deck: Card[];
   discardPile: Card[];
   auction?: Auction;
