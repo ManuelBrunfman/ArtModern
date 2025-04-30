@@ -81,9 +81,21 @@ export default function AuctionScreen({
         setGame(g);
         setAuction(g?.auction ?? null);
         setLoading(false);
+
+        // —— LOGGING: inspeccionar estado en cada snapshot —— //
+        console.log('--- AuctionScreen Snapshot ---');
+        console.log('userId:', userId);
+        console.log('raw game data:', g);
+        console.log('current auction:', g?.auction);
+        console.log('isSeller:', g?.auction?.hostPlayerId === userId);
+        console.log(
+          'alreadyBid:',
+          g?.auction?.bids?.some((b: Bid) => b.playerId === userId)
+        );
+        console.log('------------------------------');
       });
     return unsub;
-  }, [gameId]);
+  }, [gameId, userId]);
 
   if (loading) {
     return (
@@ -126,27 +138,36 @@ export default function AuctionScreen({
 
   const placeBid = async (amount: number) => {
     const err = validateBid(amount);
-    if (err) return Alert.alert('Rechazada', err);
+    if (err) {
+      console.log('Puja rechazada:', err);
+      return Alert.alert('Rechazada', err);
+    }
     try {
+      console.log('Intentando pujar cantidad:', amount);
       await placeBidTransactional(gameId, userId, amount);
       reset();
     } catch (e: any) {
+      console.error('Error en placeBidTransactional:', e);
       Alert.alert('Error', e.message);
     }
   };
 
   const finishAuction = useCallback(async () => {
     try {
+      console.log('Finalizando subasta manualmente...');
       await finishAuctionTransactional(gameId);
     } catch (e: any) {
+      console.error('Error en finishAuctionTransactional:', e);
       Alert.alert('Error', e.message);
     }
   }, [gameId]);
 
   const cancelAuction = async () => {
     try {
+      console.log('Cancelando subasta...');
       await cancelAuctionTransactional(gameId, userId);
     } catch (e: any) {
+      console.error('Error en cancelAuctionTransactional:', e);
       Alert.alert('Error', e.message);
     }
   };

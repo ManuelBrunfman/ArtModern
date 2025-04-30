@@ -1,13 +1,11 @@
-
-//navigation/types.ts
 export type RootStackParamList = {
-    Lobby: undefined;
-    CreateRoom: undefined;
-    JoinRoom: undefined;
-    WaitingRoom: { gameId: string };
-    RoomLobby: { gameId: string };
-    Game: { gameId: string };
-    EndGame: { gameId: string };
-    Collection: { gameId: string };
-  };
-  
+  Login: undefined;
+  Lobby: undefined;
+  CreateRoom: undefined;
+  JoinRoom: undefined;
+  RoomLobby: undefined;
+  Game: undefined;
+  Auction: { gameId: string; userId: string };
+  Collection: undefined;
+  EndGame: undefined;
+};
