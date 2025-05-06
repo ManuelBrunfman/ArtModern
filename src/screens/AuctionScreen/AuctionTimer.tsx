@@ -1,3 +1,4 @@
+// src/screens/AuctionScreen/AuctionTimer.tsx
 import React, { useEffect, useRef } from 'react';
 import { View, Text, Animated, StyleSheet } from 'react-native';
 
@@ -17,7 +18,7 @@ const AuctionTimer: React.FC<Props> = ({ timeLeft, duration, onTimeout }) => {
       duration: duration * 1000,
       useNativeDriver: false
     }).start(({ finished }) => finished && onTimeout());
-  }, [timeLeft]);
+  }, [timeLeft]);  // se reactiva al cambiar timeLeft
 
   const width = anim.interpolate({
     inputRange: [0, 1],
@@ -27,7 +28,7 @@ const AuctionTimer: React.FC<Props> = ({ timeLeft, duration, onTimeout }) => {
   return (
     <View style={styles.container}>
       <Animated.View style={[styles.bar, { width }]} />
-      <Text style={styles.text}>{Math.ceil(timeLeft)}</Text>
+      <Text style={styles.text}>{timeLeft}</Text>
     </View>
   );
 };

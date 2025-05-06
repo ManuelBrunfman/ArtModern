@@ -5,10 +5,10 @@ type Card = {
   id: string;
   title: string;
   artist: string;
-  auctionType: 'open' | 'sealed' | 'once' | 'double' | 'fixed';
+  auctionType: 'open';
 };
 
-const allAuctionTypes = ['open', 'sealed', 'once', 'double', 'fixed'] as const;
+const allAuctionTypes = ['open'] as const;  // solo open
 const artists = ['Van Gogh', 'Picasso', 'Kahlo', 'Dalí', 'Matisse'];
 const CARDS_PER_PLAYER = 10;
 
@@ -18,7 +18,7 @@ function generateDeck(): Card[] {
 
   for (let i = 0; i < 100; i++) {
     const artist = artists[i % artists.length];
-    const auctionType = allAuctionTypes[i % allAuctionTypes.length];
+    const auctionType = allAuctionTypes[0];  // siempre 'open'
     deck.push({
       id: `card-${idCounter++}`,
       title: `Obra ${i + 1}`,
@@ -34,7 +34,6 @@ export async function dealInitialHands(gameId: string) {
   const gameRef = firestore().collection('games').doc(gameId);
   const snapshot = await gameRef.get();
   const game = snapshot.data();
-
   if (!game) return;
 
   const deck = generateDeck();
